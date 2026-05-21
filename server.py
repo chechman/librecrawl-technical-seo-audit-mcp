@@ -806,6 +806,147 @@ def librecrawl_schema_audit(urls: list) -> dict:
     }
 
 
+@mcp.tool()
+def librecrawl_append_gsc_section(report_path: str, gsc_data: dict) -> dict:
+    """
+    Append a Google Search Console errors section to an existing MD audit report.
+
+    Workflow:
+      1. Run librecrawl_audit(url) → get report_path
+      2. Use the gsc-posi connector to pull GSC data for the domain
+      3. Pass both here to merge GSC errors into the audit report
+
+    gsc_data should contain any/all of:
+      - coverage_errors: list of {url, type, last_crawled} (Indexing > Coverage in GSC)
+      - crawl_errors:    list of {url, response_code, last_crawled}
+      - search_issues:   list of strings (manual actions, security issues)
+      - performance:     dict with clicks/impressions/ctr/position (optional summary)
+
+    Args:
+        report_path: Path returned by librecrawl_audit() or librecrawl_generate_report()
+        gsc_data:    GSC data dict pulled from gsc-posi connector
+    """
+    path = Path(report_path)
+    if not path.exists():
+        return {"success": False, "error": f"Report not found: {report_path}"}
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = ["\n\n---\n", f"## 🔍 Google Search Console Errors\n",
+             f"*Pulled: {now}*\n"]
+
+    # Coverage / Indexing errors
+    coverage = gsc_data.get("coverage_errors") or gsc_data.get("indexing_errors") or []
+    if coverage:
+        # Group by error type
+        by_type = defaultdict(list)
+        for item in coverage:
+            err_type = item.get("type") or item.get("reason") or "Unknown"
+            url = item.get("url") or item.get("inspectionUrl") or ""
+            by_type[err_type].append(url)
+
+        lines.append(f"### Indexing Errors ({len(coverage)} URLs)\n")
+        for err_type, urls in sorted(by_type.items(), key=lambda x: -len(x[1])):
+            lines.append(f"**{err_type}** — {len(urls)} URLs")
+            fix_hint = {
+                "Submitted URL not found (404)": "Fix: Remove from sitemap, or 301 redirect to correct URL.",
+                "Submitted URL seems to be a Soft 404": "Fix: Return real content or a proper 404 status code.",
+                "Redirect error": "Fix: Fix the redirect chain — ensure it resolves to a 200 in ≤2 hops.",
+                "Server error (5xx)": "Fix: Check server logs. 5xx errors block indexing.",
+                "Blocked by robots.txt": "Fix: Remove `Disallow` rule if the page should be indexed.",
+                "Blocked due to access forbidden (403)": "Fix: Allow Googlebot access or remove from sitemap.",
+                "Crawled - currently not indexed": "Fix: Improve content quality, add internal links, check canonical.",
+                "Discovered - currently not indexed": "Fix: Add internal links to push Googlebot to crawl.",
+                "Alternate page with proper canonical tag": "Info: These are intentionally canonicalized — verify it's correct.",
+                "Duplicate without user-selected canonical": "Fix: Add `<link rel='canonical'>` pointing to the preferred URL.",
+                "Page with redirect": "Info: These redirect — update internal links to point to final URL.",
+                "Excluded by 'noindex' tag": "Info: Verify these pages should be noindexed.",
+            }.get(err_type, "Fix: Investigate in GSC Coverage report.")
+            lines.append(f"> {fix_hint}\n")
+            for u in urls[:10]:
+                if u:
+                    lines.append(f"- `{u}`")
+            if len(urls) > 10:
+                lines.append(f"- … and {len(urls)-10} more")
+            lines.append("")
+    else:
+        lines.append("### Indexing Errors\n")
+        lines.append("✅ No coverage errors found in provided GSC data.\n")
+
+    # Crawl errors
+    crawl_errors = gsc_data.get("crawl_errors") or []
+    if crawl_errors:
+        lines.append(f"### Crawl Errors ({len(crawl_errors)})\n")
+        lines.append("| URL | Status | Last Crawled |")
+        lines.append("|-----|--------|-------------|")
+        for item in crawl_errors[:20]:
+            url = item.get("url", "")
+            code = item.get("response_code") or item.get("status", "?")
+            last = item.get("last_crawled") or item.get("lastCrawled", "—")
+            lines.append(f"| `{url}` | {code} | {last} |")
+        if len(crawl_errors) > 20:
+            lines.append(f"| … | {len(crawl_errors)-20} more | |")
+        lines.append("")
+
+    # Manual actions / security issues
+    issues = gsc_data.get("search_issues") or gsc_data.get("manual_actions") or []
+    if issues:
+        lines.append(f"### ⚠️ Manual Actions / Security Issues\n")
+        for issue in issues:
+            lines.append(f"- 🚨 {issue}")
+        lines.append("")
+
+    # Performance summary (optional)
+    perf = gsc_data.get("performance") or {}
+    if perf:
+        lines.append("### Search Performance Summary\n")
+        lines.append("| Metric | Value |")
+        lines.append("|--------|-------|")
+        if "clicks" in perf:      lines.append(f"| Clicks (28d) | {perf['clicks']:,} |")
+        if "impressions" in perf: lines.append(f"| Impressions (28d) | {perf['impressions']:,} |")
+        if "ctr" in perf:         lines.append(f"| CTR | {perf['ctr']:.1%} |")
+        if "position" in perf:    lines.append(f"| Avg Position | {perf['position']:.1f} |")
+        lines.append("")
+
+    # GSC fix checklist
+    gsc_priority = 1
+    checklist = []
+    coverage_errors_by_sev = {}
+    for item in coverage:
+        t = item.get("type") or item.get("reason") or "Unknown"
+        coverage_errors_by_sev[t] = coverage_errors_by_sev.get(t, 0) + 1
+
+    critical_types = ["Submitted URL not found (404)", "Server error (5xx)", "Redirect error"]
+    warning_types  = ["Submitted URL seems to be a Soft 404", "Crawled - currently not indexed",
+                      "Duplicate without user-selected canonical"]
+
+    for t in critical_types:
+        if t in coverage_errors_by_sev:
+            checklist.append(f"- [ ] **P{gsc_priority} (GSC)** Fix {coverage_errors_by_sev[t]}x '{t}'")
+            gsc_priority += 1
+    for t in warning_types:
+        if t in coverage_errors_by_sev:
+            checklist.append(f"- [ ] **P{gsc_priority} (GSC)** Resolve {coverage_errors_by_sev[t]}x '{t}'")
+            gsc_priority += 1
+
+    if checklist:
+        lines.append("### GSC Fix Checklist\n")
+        lines.extend(checklist)
+        lines.append("")
+
+    gsc_section = "\n".join(lines)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(gsc_section)
+
+    return {
+        "success": True,
+        "report_file": str(path),
+        "gsc_section_added": True,
+        "coverage_errors": len(coverage),
+        "crawl_errors": len(crawl_errors),
+        "manual_actions": len(issues),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(mcp.streamable_http_app(), host="127.0.0.1", port=MCP_PORT, log_level="info")
