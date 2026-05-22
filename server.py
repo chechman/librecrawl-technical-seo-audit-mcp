@@ -50,16 +50,40 @@ EXPORT_FIELDS = [
 def _parse_export(export) -> tuple:
     """
     Parse LibreCrawl export response into (pages, links).
-    Handles both direct list/dict formats and the multi-file
-    {"files": [{"content": "...", "filename": "..."}]} format.
+    Handles three response formats LibreCrawl uses depending on version:
+      1. Direct list of pages
+      2. Dict with data/urls/pages key
+      3. Single-file: {"content": "...", "filename": "librecrawl_export_*.json"}
+      4. Multi-file:  {"files": [...], "multiple_files": true}
     """
     import json as _json
+
+    def _extract_from_parsed(parsed):
+        for key in ("data", "urls", "pages"):
+            if key in parsed and isinstance(parsed[key], list):
+                return parsed[key]
+        return []
+
     if isinstance(export, list):
         return export, []
+
     # Direct dict with known key
     for key in ("data", "urls", "pages"):
         if key in export and isinstance(export[key], list):
             return export[key], []
+
+    # Single-file format: {"content": "...", "filename": "librecrawl_export_*.json", "success": True}
+    if "content" in export and "filename" in export:
+        filename = export.get("filename", "")
+        raw      = export.get("content", "")
+        if "export" in filename and raw:
+            try:
+                pages = _extract_from_parsed(_json.loads(raw))
+                if pages:
+                    return pages, []
+            except Exception:
+                pass
+
     # Multi-file format: {"files": [...], "multiple_files": true}
     pages, links = [], []
     for f in (export.get("files") or []):
@@ -72,10 +96,9 @@ def _parse_export(export) -> tuple:
         except Exception:
             continue
         if "export" in filename:
-            for key in ("data", "urls", "pages"):
-                if key in parsed and isinstance(parsed[key], list):
-                    pages = parsed[key]
-                    break
+            found = _extract_from_parsed(parsed)
+            if found:
+                pages = found
         elif "links" in filename and isinstance(parsed, list):
             links = parsed
     return pages, links
@@ -1085,11 +1108,23 @@ def librecrawl_audit(url: str, max_pages: int = 500) -> dict:
         d          = call("GET", "/api/crawl_status")
         stats      = d.get("stats", {})
         crawled    = stats.get("crawled", 0)
-        is_running = d.get("is_running", True)
-        if not is_running and crawled > 0:
+        # LibreCrawl uses status="completed"/"idle"/"running" — is_running is always None
+        status_str = d.get("status", "")
+        is_running = d.get("is_running")
+        done = (status_str == "completed") or (status_str == "idle" and crawled > 0) or (is_running is False)
+        if done and crawled > 0:
             break
-        if not is_running and crawled == 0:
-            # Crawl failed immediately — don't hang for 20 min
+        if done and crawled == 0:
+            # Verify via DB before declaring failure (fast crawls save to DB before poll fires)
+            try:
+                crawls_resp = call("GET", "/api/crawls/list")
+                saved = next((c for c in crawls_resp.get("crawls", [])
+                              if c.get("id") == crawl_id), None)
+                if saved and saved.get("urls_crawled", 0) > 0:
+                    crawled = saved["urls_crawled"]
+                    break  # Crawl succeeded — data is in DB
+            except Exception:
+                pass
             return {
                 "success": False,
                 "crawl_id": crawl_id,
