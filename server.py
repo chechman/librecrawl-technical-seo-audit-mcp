@@ -9,6 +9,7 @@ import os
 import json
 import time
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
@@ -47,17 +48,19 @@ EXPORT_FIELDS = [
 ]
 
 _client = None
+_client_lock = threading.Lock()
 
 
 # ── HTTP client ───────────────────────────────────────────────────────────────
 
 def get_client():
-    """Return authenticated httpx.Client. Re-auths automatically on 401."""
+    """Return authenticated httpx.Client. Re-auths automatically on 401. Thread-safe."""
     global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.Client(timeout=30, follow_redirects=True)
-        _client.post(f"{BASE}/api/login", json={"username": "mcp-user"}).raise_for_status()
-    return _client
+    with _client_lock:
+        if _client is None or _client.is_closed:
+            _client = httpx.Client(timeout=30, follow_redirects=True)
+            _client.post(f"{BASE}/api/login", json={"username": "mcp-user"}).raise_for_status()
+        return _client
 
 
 def call(method, path, **kwargs):
@@ -67,7 +70,10 @@ def call(method, path, **kwargs):
         _client = None
         r = get_client().request(method, f"{BASE}{path}", **kwargs)
     r.raise_for_status()
-    return r.json()
+    try:
+        return r.json()
+    except Exception:
+        raise RuntimeError(f"LibreCrawl returned non-JSON ({r.status_code}): {r.text[:200]}")
 
 
 # ── Site-level checks (robots, sitemap, HTTPS, www) ──────────────────────────
@@ -95,8 +101,7 @@ def _site_check(base_url: str) -> dict:
                 None
             )
             # Check if important paths are blocked
-            important_blocked = [d for d in disallow if d in ("/", "/wp-admin", "/wp-login.php")
-                                  or not d.startswith("/wp-")]
+            important_blocked = [d for d in disallow if d in ("/", "/wp-admin", "/wp-login.php")]
             results["robots_txt"] = {
                 "found": True,
                 "disallow_count": len(disallow),
@@ -1031,20 +1036,31 @@ def librecrawl_audit(url: str, max_pages: int = 500) -> dict:
     crawled  = 0
     while time.time() < deadline:
         time.sleep(8)
-        d       = call("GET", "/api/crawl_status")
-        stats   = d.get("stats", {})
-        crawled = stats.get("crawled", 0)
-        if not d.get("is_running", True) and crawled > 0:
+        d          = call("GET", "/api/crawl_status")
+        stats      = d.get("stats", {})
+        crawled    = stats.get("crawled", 0)
+        is_running = d.get("is_running", True)
+        if not is_running and crawled > 0:
             break
+        if not is_running and crawled == 0:
+            # Crawl failed immediately — don't hang for 20 min
+            return {
+                "success": False,
+                "crawl_id": crawl_id,
+                "error": "Crawl stopped with 0 pages crawled. Check the URL is reachable and LibreCrawl is running.",
+            }
 
     # Export
     if crawl_id is not None:
         call("POST", f"/api/crawls/{crawl_id}/load")
+    else:
+        # crawl_id missing — LibreCrawl may return stale data from a prior crawl
+        pass  # surfaced in return value below
 
     r = get_client().post(f"{BASE}/api/export_data", json={
         "format": "json",
         "fields": EXPORT_FIELDS,
-    }, timeout=120)
+    }, timeout=300)
     r.raise_for_status()
     export = r.json()
 
@@ -1129,7 +1145,7 @@ def librecrawl_generate_report(crawl_id: int = None) -> dict:
     r = get_client().post(f"{BASE}/api/export_data", json={
         "format": "json",
         "fields": EXPORT_FIELDS,
-    }, timeout=120)
+    }, timeout=300)
     r.raise_for_status()
     export = r.json()
 
@@ -1217,7 +1233,7 @@ def librecrawl_export_results(crawl_id: int = None) -> dict:
     r = get_client().post(f"{BASE}/api/export_data", json={
         "format": "json",
         "fields": EXPORT_FIELDS,
-    }, timeout=120)
+    }, timeout=300)
     r.raise_for_status()
     return r.json()
 
@@ -1237,13 +1253,21 @@ def librecrawl_stop_crawl() -> dict:
 @mcp.tool()
 def librecrawl_pause_crawl() -> dict:
     """Pause the currently running crawl. Resume with librecrawl_resume_crawl()."""
-    return call("POST", "/api/pause_crawl")
+    try:
+        return call("POST", "/api/pause_crawl")
+    except Exception as e:
+        return {"success": False, "error": str(e),
+                "note": "This endpoint may not be available in your LibreCrawl version."}
 
 
 @mcp.tool()
 def librecrawl_resume_crawl() -> dict:
     """Resume a paused crawl."""
-    return call("POST", "/api/resume_crawl")
+    try:
+        return call("POST", "/api/resume_crawl")
+    except Exception as e:
+        return {"success": False, "error": str(e),
+                "note": "This endpoint may not be available in your LibreCrawl version."}
 
 
 @mcp.tool()
@@ -1264,7 +1288,11 @@ def librecrawl_filter_issues(patterns: list) -> dict:
     Args:
         patterns: List of strings to exclude (e.g. ["/wp-admin/", "cdn.example.com"])
     """
-    return call("POST", "/api/filter_issues", json={"patterns": patterns})
+    try:
+        return call("POST", "/api/filter_issues", json={"patterns": patterns})
+    except Exception as e:
+        return {"success": False, "error": str(e),
+                "note": "This endpoint may not be available in your LibreCrawl version."}
 
 
 @mcp.tool()
@@ -1276,7 +1304,11 @@ def librecrawl_visualization_data() -> dict:
 
     Returns: nodes list (url, depth, status) and edges list (source → target links).
     """
-    return call("GET", "/api/visualization_data")
+    try:
+        return call("GET", "/api/visualization_data")
+    except Exception as e:
+        return {"success": False, "error": str(e),
+                "note": "This endpoint may not be available in your LibreCrawl version."}
 
 
 @mcp.tool()
@@ -1302,7 +1334,7 @@ def librecrawl_internal_links_analysis(crawl_id: int = None) -> dict:
         "format": "json",
         "fields": ["url", "status_code", "title", "depth",
                    "internal_links", "external_links", "links_detailed", "linked_from"],
-    }, timeout=120)
+    }, timeout=300)
     r.raise_for_status()
     export = r.json()
     pages  = export if isinstance(export, list) else export.get("urls", export.get("pages", []))
@@ -1531,7 +1563,33 @@ class _JsonLdExtractor(HTMLParser):
             self._buf.append(data)
 
 
+def _validate_public_url(url: str) -> str | None:
+    """Return error string if URL is unsafe, else None."""
+    import ipaddress
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return f"URL scheme must be http or https, got: {parsed.scheme!r}"
+        host = parsed.hostname or ""
+        # Block private/loopback/link-local addresses
+        try:
+            addr = ipaddress.ip_address(host)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                return f"Private/internal IP not allowed: {host}"
+        except ValueError:
+            # It's a hostname — block obvious internal names
+            blocked = ("localhost", "metadata.google.internal")
+            if any(host == b or host.endswith("." + b) for b in blocked):
+                return f"Internal hostname not allowed: {host}"
+    except Exception as e:
+        return f"Invalid URL: {e}"
+    return None
+
+
 def _extract_schema(url: str) -> list:
+    err = _validate_public_url(url)
+    if err:
+        return [{"error": err}]
     try:
         r = httpx.get(url, follow_redirects=True, timeout=15,
                       headers={"User-Agent": "Mozilla/5.0 (compatible; SEO-bot/1.0)"})
@@ -1645,7 +1703,9 @@ def librecrawl_append_gsc_section(report_path: str, gsc_data: dict) -> dict:
         report_path: Path returned by librecrawl_audit() or librecrawl_generate_report()
         gsc_data:    GSC data dict from the gsc-posi connector
     """
-    path = Path(report_path)
+    path = Path(report_path).resolve()
+    if not str(path).startswith(str(REPORTS_DIR.resolve())):
+        return {"success": False, "error": "report_path must be within REPORTS_DIR"}
     if not path.exists():
         return {"success": False, "error": f"Report not found: {report_path}"}
 
