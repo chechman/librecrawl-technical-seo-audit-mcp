@@ -129,8 +129,25 @@ PATCHEOF
 info "Step 3/5 — Building and starting LibreCrawl Docker container..."
 info "  (First build takes 5–8 min — Playwright + Chromium install)"
 
+# Patch base docker-compose.yml to use LIBRECRAWL_PORT (avoids port merge conflicts)
+python3 - "${LIBRECRAWL_DIR}/docker-compose.yml" "${LIBRECRAWL_PORT}" << 'COMPOSEPATCHEOF'
+import sys
+path, port = sys.argv[1], sys.argv[2]
+content = open(path).read()
+import re
+patched = re.sub(
+    r'"\$\{HOST_BINDING[^}]*\}:\d+:\d+"',
+    f'"127.0.0.1:{port}:5000"',
+    content
+)
+if patched != content:
+    open(path, "w").write(patched)
+    print(f"docker-compose.yml port patched to 127.0.0.1:{port}:5000")
+else:
+    print("docker-compose.yml port already patched or pattern changed — skipping")
+COMPOSEPATCHEOF
+
 cat > "${LIBRECRAWL_DIR}/.env" << ENVEOF
-HOST_BINDING=0.0.0.0
 LOCAL_MODE=true
 REGISTRATION_DISABLED=true
 DEMO_MODE=false
@@ -140,8 +157,6 @@ ENVEOF
 cat > "${LIBRECRAWL_DIR}/docker-compose.override.yml" << OVERRIDEEOF
 services:
   librecrawl:
-    ports:
-      - "127.0.0.1:${LIBRECRAWL_PORT}:5000"
     restart: always
     shm_size: '2gb'
     healthcheck:
