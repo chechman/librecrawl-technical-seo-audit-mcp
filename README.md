@@ -1,12 +1,15 @@
 # LibreCrawl MCP
 
-**Self-hosted SEO crawler for Claude — Screaming Frog-level audits, zero per-crawl cost.**
+**Self-hosted SEO crawler for any AI agent — Screaming Frog-level audits, zero per-crawl cost.**
 
-Wraps [LibreCrawl](https://github.com/PhialsBasement/LibreCrawl) as a Claude MCP server. Give Claude the ability to fully audit any website — broken links, canonical issues, image alt text, orphan pages, Core Web Vitals, Schema.org, GSC errors — all running on your own server.
+Wraps [LibreCrawl](https://github.com/PhialsBasement/LibreCrawl) as a fully local MCP server. Give your AI the ability to fully audit any website — broken links, canonical issues, image alt text, orphan pages, Core Web Vitals, Schema.org, GSC errors — 100% on your own machine. No cloud. No account. No data leaving your server.
+
+Works with **any MCP-compatible AI agent** — Claude, Cursor, Windsurf, OpenAI Codex, Continue.dev, VS Code Copilot, and more.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/Claude-MCP-orange)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-orange)](https://modelcontextprotocol.io)
 [![LibreCrawl](https://img.shields.io/badge/Powered%20by-LibreCrawl-green)](https://github.com/PhialsBasement/LibreCrawl)
+[![Works With](https://img.shields.io/badge/Works%20With-Claude%20%7C%20Cursor%20%7C%20Codex%20%7C%20Windsurf-blue)](https://modelcontextprotocol.io)
 
 ---
 
@@ -51,11 +54,11 @@ Wraps [LibreCrawl](https://github.com/PhialsBasement/LibreCrawl) as a Claude MCP
 
 ## What LibreCrawl MCP gives you
 
-[LibreCrawl](https://github.com/PhialsBasement/LibreCrawl) is a powerful self-hosted SEO crawler. On its own you get a web UI and raw crawl data. This MCP layer turns it into a fully automated Claude-native audit engine — one sentence to Claude gets you a complete site audit, saved as a Markdown report, ready to act on.
+[LibreCrawl](https://github.com/PhialsBasement/LibreCrawl) is a powerful self-hosted SEO crawler. On its own you get a web UI and raw crawl data. This MCP layer turns it into a fully automated AI-native audit engine — one sentence gets you a complete site audit, saved as a Markdown report, ready to act on.
 
-### 19 tools, zero context-switching
+### 19 tools, works with any AI agent
 
-Claude gains **19 specialised SEO tools**. Ask in plain English — Claude picks the right tool, runs it, interprets the output, and gives you a fix plan. No dashboards to navigate, no exports to download, no manual cross-referencing.
+Your AI gains **19 specialised SEO tools**. Ask in plain English — the AI picks the right tool, runs it, interprets the output, and gives you a fix plan. No dashboards to navigate, no exports to download, no manual cross-referencing.
 
 - `librecrawl_audit()` — one call: crawls the site, runs site-level checks, generates a structured Markdown report with a prioritised fix checklist. Done.
 - Persistent authenticated session across all tool calls — no re-login between steps
@@ -98,7 +101,7 @@ LibreCrawl's raw JSON export gets transformed into a structured audit report cov
 
 ### GSC integration
 
-Connect any Google Search Console MCP (we recommend [mcp-gsc](https://github.com/AminForou/mcp-gsc)) and Claude will pull your real indexing errors — 404s in sitemap, server errors, soft 404s, crawl blocks — and append them to the audit report with fix hints. One conversation, complete picture.
+Connect any Google Search Console MCP (we recommend [mcp-gsc](https://github.com/AminForou/mcp-gsc)) and your AI will pull your real indexing errors — 404s in sitemap, server errors, soft 404s, crawl blocks — and append them to the audit report with fix hints. One conversation, complete picture.
 
 ---
 
@@ -127,9 +130,33 @@ docker ps | grep librecrawl        # LibreCrawl — should show "healthy"
 
 ---
 
-### Step 2 — Add to Claude
+### Step 2 — Add to your AI agent
 
-**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+The installer auto-configures this for you when you answer question [2/3]. If you prefer manual setup, use the configs below.
+
+LibreCrawl MCP supports **two transport modes**:
+- **HTTP mode** — for Claude Desktop and Claude Code (server runs persistently via PM2)
+- **Stdio mode** — for Cursor, Codex, Windsurf, Continue.dev and any agent that spawns subprocesses
+
+---
+
+#### Claude Desktop
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `~/.config/Claude/claude_desktop_config.json` (Linux):
+
+```json
+{
+  "mcpServers": {
+    "librecrawl": {
+      "type": "http",
+      "url": "http://127.0.0.1:5081/mcp"
+    }
+  }
+}
+```
+Restart Claude Desktop after saving.
+
+#### Claude Code
+Edit `~/.claude/settings.json`:
 
 ```json
 {
@@ -142,35 +169,105 @@ docker ps | grep librecrawl        # LibreCrawl — should show "healthy"
 }
 ```
 
-**Claude Code** — edit `~/.claude/settings.json`:
+#### Cursor
+Edit `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project):
 
 ```json
 {
   "mcpServers": {
     "librecrawl": {
-      "type": "http",
-      "url": "http://127.0.0.1:5081/mcp"
+      "command": "python3",
+      "args": ["~/librecrawl-mcp/mcp-server/server.py"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "LIBRECRAWL_PORT": "5080"
+      }
     }
   }
 }
 ```
 
-Restart Claude Desktop after saving. In Claude Code, the MCP is live immediately.
+#### OpenAI Codex CLI
+Edit `~/.codex/config.yaml`:
+
+```yaml
+mcpServers:
+  librecrawl:
+    command: python3
+    args:
+      - ~/librecrawl-mcp/mcp-server/server.py
+    env:
+      MCP_TRANSPORT: stdio
+      LIBRECRAWL_PORT: "5080"
+```
+
+#### Windsurf
+Edit `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "librecrawl": {
+      "command": "python3",
+      "args": ["~/librecrawl-mcp/mcp-server/server.py"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "LIBRECRAWL_PORT": "5080"
+      }
+    }
+  }
+}
+```
+
+#### Continue.dev
+Edit `.continue/config.yaml` in your project:
+
+```yaml
+mcpServers:
+  - name: librecrawl
+    command: python3
+    args:
+      - ~/librecrawl-mcp/mcp-server/server.py
+    env:
+      MCP_TRANSPORT: stdio
+      LIBRECRAWL_PORT: "5080"
+```
+
+#### VS Code with Copilot / GitHub Copilot Agent
+Edit `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "servers": {
+    "librecrawl": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["~/librecrawl-mcp/mcp-server/server.py"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "LIBRECRAWL_PORT": "5080"
+      }
+    }
+  }
+}
+```
+
+> **Note for stdio mode:** LibreCrawl Docker must already be running (`docker ps | grep librecrawl`). The AI agent spawns a fresh MCP process per session that connects to it on `LIBRECRAWL_PORT`.
 
 ---
 
 ### Step 3 — Run your first audit
 
-Open Claude and type:
+Open your AI agent and type:
 
 ```
 Audit https://example.com and give me a full SEO report
 ```
 
-Claude will:
+Your AI will:
 1. Crawl the entire site (runs in background, progress visible in `pm2 logs librecrawl-mcp`)
 2. Run site-level checks (robots.txt, sitemap, HTTPS, www redirect)
-3. Analyse all 35+ SEO checks across every crawled page
+3. Analyse all 37 SEO checks across every crawled page
 4. Save a Markdown report to `~/librecrawl-reports/example.com-YYYYMMDD-HHMMSS.md`
 5. Return a summary of the top issues with a prioritised fix checklist
 
@@ -201,13 +298,13 @@ The report is saved at `~/librecrawl-reports/`. Each report has:
 
 ### Step 5 — Add GSC errors (optional)
 
-Install a Google Search Console MCP ([mcp-gsc](https://github.com/AminForou/mcp-gsc) is recommended), then ask:
+Install a Google Search Console MCP ([mcp-gsc](https://github.com/AminForou/mcp-gsc) is recommended — the installer can do this automatically in Q3), then ask:
 
 ```
 Audit https://example.com and include GSC indexing errors
 ```
 
-Claude will merge your real GSC coverage errors — 404s in sitemap, soft 404s, server errors, crawl blocks — into the audit report automatically.
+Your AI will merge your real GSC coverage errors — 404s in sitemap, soft 404s, server errors, crawl blocks — into the audit report automatically.
 
 ---
 
@@ -232,7 +329,7 @@ Quick site health check for example.com — no crawl needed
 
 For local installs see the Quick Start above. To expose your LibreCrawl MCP over Nginx (e.g. on a VPS so your whole team can use it):
 
-**Claude config** (via mcp-remote):
+**Claude Desktop / Claude Code** (via mcp-remote):
 
 ```json
 {
@@ -322,13 +419,13 @@ First run opens a browser for Google auth. Token is cached.
 
 ### Using GSC with audit reports
 
-Once connected, Claude can pull GSC errors and merge them into any audit:
+Once connected, your AI can pull GSC errors and merge them into any audit:
 
 ```
 "Audit uichemy.com, include GSC indexing errors"
 ```
 
-Claude will:
+Your AI will:
 1. Run `librecrawl_audit("https://uichemy.com")` → gets `report_path`
 2. Pull GSC coverage errors via the GSC MCP
 3. Call `librecrawl_append_gsc_section(report_path, gsc_data)` → adds a GSC section to the report
@@ -366,19 +463,24 @@ The GSC section includes: indexing errors with fix hints, crawl errors, manual a
 ## Architecture
 
 ```
-Claude
-  │  MCP (streamable-http)
+Any MCP-compatible AI agent
+(Claude / Cursor / Codex / Windsurf / Continue.dev / Copilot / ...)
+  │
+  │  HTTP mode (Claude Desktop/Code):  streamable-http via PM2 → port 5081
+  │  Stdio mode (Cursor/Codex/etc.):   subprocess spawn, stdin/stdout JSON-RPC
+  │
   ▼
-Python MCP server (port 5081)
-  │  REST API
+LibreCrawl MCP server (server.py)
+  │  REST API (localhost only)
   ▼
-LibreCrawl Flask app (port 5080, Docker)
+LibreCrawl Flask app (Docker, port 5080)  ←  Visual UI at localhost:5080
   │  Headless crawl (Playwright + Chromium)
   ▼
 Target website
 ```
 
-**Stack:** LibreCrawl · FastMCP · httpx · uvicorn · PM2 · Docker
+**Stack:** LibreCrawl · FastMCP · httpx · uvicorn · PM2 · Docker  
+**Transport:** `MCP_TRANSPORT=http` (default, Claude) or `MCP_TRANSPORT=stdio` (Cursor, Codex, Windsurf)
 
 ---
 
