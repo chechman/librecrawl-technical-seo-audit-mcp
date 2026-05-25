@@ -64,13 +64,13 @@ Your AI gains **19 specialised SEO tools**. Ask in plain English — the AI pick
 - Persistent authenticated session across all tool calls — no re-login between steps
 - Every crawl saved to SQLite with full history via `librecrawl_list_crawls()`
 
-### Report engine — 35+ checks, 17 sections
+### Report engine — 37 checks, 17 sections
 
 LibreCrawl's raw JSON export gets transformed into a structured audit report covering everything Screaming Frog covers, plus things it doesn't:
 
 | Section | What it catches |
 |---------|----------------|
-| Summary scorecard | 30+ metrics with pass/fail at a glance |
+| Summary scorecard | 37 metrics with pass/fail at a glance |
 | Critical issues | Broken pages + which pages link to them, duplicate titles, bad canonicals |
 | On-page warnings | Meta length, missing H1, thin content, slow response time |
 | H1 ↔ Title alignment | Keyword mismatch check — flags pages where headings contradict title intent |
@@ -298,7 +298,7 @@ The report is saved at `~/librecrawl-reports/`. Each report has:
 
 ### Step 5 — Add GSC errors (optional)
 
-Install a Google Search Console MCP ([mcp-gsc](https://github.com/AminForou/mcp-gsc) is recommended — the installer can do this automatically in Q3), then ask:
+Install a Google Search Console MCP ([mcp-gsc](https://github.com/AminForou/mcp-gsc) is recommended — the installer handles this automatically at question [3/3]), then ask:
 
 ```
 Audit https://example.com and include GSC indexing errors
@@ -360,11 +360,11 @@ location /librecrawl/ {
 
 ## Add Google Search Console (optional but recommended)
 
-LibreCrawl MCP can merge GSC coverage errors into your audit report via `librecrawl_append_gsc_section`. To use it, connect a GSC MCP server to Claude first.
+LibreCrawl MCP can merge GSC coverage errors into your audit report via `librecrawl_append_gsc_section`. To use it, connect a GSC MCP server to your AI agent first.
 
 ### Recommended: mcp-gsc (AminForou)
 
-The best community GSC MCP — 876+ stars, maintained, supports OAuth and service account auth.
+The best community GSC MCP — 900+ stars, maintained, supports OAuth and service account auth.
 
 **Install:**
 ```bash
@@ -378,7 +378,7 @@ pip install mcp-search-console
 1. Create a project at [console.cloud.google.com](https://console.cloud.google.com)
 2. Enable **Google Search Console API**
 3. Create **OAuth 2.0 Client ID** → Desktop app → download `credentials.json`
-4. Add to Claude config:
+4. Add to your AI agent config:
 
 ```json
 {
@@ -401,7 +401,7 @@ First run opens a browser for Google auth. Token is cached.
 1. Create a service account at [console.cloud.google.com](https://console.cloud.google.com) → IAM → Service Accounts
 2. Download the JSON key file
 3. Add the service account email as a **user** in your GSC property (Settings → Users and permissions)
-4. Add to Claude config:
+4. Add to your AI agent config:
 
 ```json
 {
@@ -438,7 +438,7 @@ The GSC section includes: indexing errors with fix hints, crawl errors, manual a
 
 | Tool | What it does |
 |------|-------------|
-| `librecrawl_audit` | **One-call full audit** — crawl + site checks + 30+ checks + report |
+| `librecrawl_audit` | **One-call full audit** — crawl + site checks + 37 checks + report |
 | `librecrawl_site_check` | Instant: robots.txt, sitemap, HTTPS, www — no crawl needed |
 | `librecrawl_generate_report` | Re-generate report from a past crawl |
 | `librecrawl_start_crawl` | Start async crawl, returns `crawl_id` |
@@ -480,7 +480,7 @@ Target website
 ```
 
 **Stack:** LibreCrawl · FastMCP · httpx · uvicorn · PM2 · Docker  
-**Transport:** `MCP_TRANSPORT=http` (default, Claude) or `MCP_TRANSPORT=stdio` (Cursor, Codex, Windsurf)
+**Transport:** `MCP_TRANSPORT=http` (default, PM2/HTTP — Claude Desktop & Code) or `MCP_TRANSPORT=stdio` (Cursor, Codex, Windsurf, Continue.dev)
 
 ---
 
@@ -521,7 +521,7 @@ docker stop librecrawl
 ## Related
 
 - [LibreCrawl](https://github.com/PhialsBasement/LibreCrawl) — the crawler this wraps
-- [mcp-gsc](https://github.com/AminForou/mcp-gsc) — Google Search Console MCP (876 stars, recommended)
+- [mcp-gsc](https://github.com/AminForou/mcp-gsc) — Google Search Console MCP (900+ stars, recommended)
 - [Model Context Protocol](https://modelcontextprotocol.io)
 
 ---
