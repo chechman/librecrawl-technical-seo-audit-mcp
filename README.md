@@ -13,6 +13,15 @@ Works with **any MCP-compatible AI agent** — Claude, Cursor, Windsurf, OpenAI 
 
 ---
 
+### What's new in v1.1.0
+
+- **Auto-recovery from stuck crawler** — `librecrawl_audit()` and `librecrawl_start_crawl()` now silently reset paused/stale crawler state before starting a new run. No more *"Crawl already in progress"* errors after a previous session was interrupted. Run a fresh audit anytime — it just works.
+- **GSC top queries section** — the report now includes a top-25 search queries table (clicks, impressions, CTR, position) automatically appended via `librecrawl_append_gsc_section()`.
+- **🎯 Quick wins detection** — page-2 keywords (positions 6-20) with high impressions are auto-surfaced as optimisation opportunities.
+- **Flat-or-nested GSC input** — `gsc_data` now accepts performance metrics either nested under `performance` or flat at the top level. Whichever your GSC MCP returns, it just works.
+
+---
+
 ## vs Screaming Frog
 
 | Check | Screaming Frog Free | Screaming Frog Paid | LibreCrawl MCP |
@@ -101,7 +110,14 @@ LibreCrawl's raw JSON export gets transformed into a structured audit report cov
 
 ### GSC integration
 
-Connect any Google Search Console MCP (we recommend [mcp-gsc](https://github.com/AminForou/mcp-gsc)) and your AI will pull your real indexing errors — 404s in sitemap, server errors, soft 404s, crawl blocks — and append them to the audit report with fix hints. One conversation, complete picture.
+Connect any Google Search Console MCP (we recommend [mcp-gsc](https://github.com/AminForou/mcp-gsc)) and your AI will pull:
+- **Indexing errors** — 404s in sitemap, server errors, soft 404s, crawl blocks (with fix hints)
+- **Top 25 search queries** — clicks, impressions, CTR, average position
+- **🎯 Quick wins** — page-2 keywords (pos 6-20) with high impressions, auto-surfaced for optimisation
+
+All appended to the same audit report. One conversation, complete picture.
+
+> **GSC property type matters.** If your site is verified as a **Domain property** in GSC, pass `sc-domain:yoursite.com` as the site URL. If it's a **URL-prefix property**, pass the full `https://yoursite.com/` (trailing slash matters). The installer's GSC step walks through both.
 
 ---
 
@@ -296,15 +312,34 @@ The report is saved at `~/librecrawl-reports/`. Each report has:
 
 ---
 
-### Step 5 — Add GSC errors (optional)
+### Step 5 — Add GSC errors + top queries (recommended)
 
 Install a Google Search Console MCP ([mcp-gsc](https://github.com/AminForou/mcp-gsc) is recommended — the installer handles this automatically at question [3/3]), then ask:
 
 ```
-Audit https://example.com and include GSC indexing errors
+Audit https://example.com and include GSC indexing errors + top queries
 ```
 
-Your AI will merge your real GSC coverage errors — 404s in sitemap, soft 404s, server errors, crawl blocks — into the audit report automatically.
+Your AI will merge into the same report:
+- Real GSC coverage errors — 404s in sitemap, soft 404s, server errors, crawl blocks
+- Top 25 search queries with clicks, impressions, CTR, position
+- 🎯 Auto-surfaced page-2 quick wins (queries at position 6-20 with high impressions)
+
+**First-time GSC setup gotchas:**
+
+1. **Property type matters.** In GSC, sites are verified as either:
+   - **Domain property** → use `sc-domain:example.com` as the site URL
+   - **URL-prefix property** → use the full `https://example.com/` (trailing slash matters)
+   
+   If the GSC tool returns *"User does not have sufficient permission for site"*, you almost certainly mixed these up. Run `list_sites` first to see how your property is registered:
+   
+   ```
+   List all GSC sites I have access to
+   ```
+
+2. **OAuth on first use.** The GSC MCP opens a browser for Google OAuth on the first call. Pick the Google account that owns the verified property. Token is cached after — no re-auth.
+
+3. **Service account alternative.** For team setups or headless servers, use a Google Cloud service account instead of OAuth. Grant the service account email **Restricted user** access in GSC → Settings → Users and permissions.
 
 ---
 

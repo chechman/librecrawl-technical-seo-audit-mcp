@@ -392,6 +392,11 @@ case "$GSC_CHOICE" in
     echo -e "  ${YELLOW}First use:${NC} Your AI agent will open a browser for Google OAuth."
     echo -e "  Select the Google account that has access to your Search Console properties."
     echo -e "  Token is cached after that — no re-auth needed."
+    echo ""
+    echo -e "  ${BOLD}⚠️  Property type gotcha${NC} — common reason GSC returns 'insufficient permission':"
+    echo -e "  • If your site is a ${BOLD}Domain property${NC} in GSC → use ${YELLOW}sc-domain:yoursite.com${NC}"
+    echo -e "  • If your site is a ${BOLD}URL-prefix property${NC} → use ${YELLOW}https://yoursite.com/${NC} (trailing slash)"
+    echo -e "  Ask your AI: ${YELLOW}'list my GSC sites'${NC} to see how yours is registered."
     ;;
   3)
     echo "  Skipped."

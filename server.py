@@ -133,6 +133,61 @@ def call(method, path, **kwargs):
         raise RuntimeError(f"LibreCrawl returned non-JSON ({r.status_code}): {r.text[:200]}")
 
 
+def _ensure_crawler_ready() -> dict:
+    """
+    Make sure the upstream crawler is in a clean state before a new crawl.
+
+    Recovers from three stale states people regularly hit:
+      1. A previous crawl is still running (blocks start_crawl with "Crawl already in progress")
+      2. A previous crawl is paused (same block, plus the resume button is dead from this session)
+      3. The crawler is wedged with 0 progress for >60s but `is_running=True` (zombie thread)
+
+    Returns a short status dict so callers can surface what was reset (helpful in logs).
+    Never raises — best-effort cleanup.
+    """
+    state = {"was_running": False, "was_paused": False, "was_stale": False, "action": "none"}
+    try:
+        s = call("GET", "/api/crawl_status")
+    except Exception:
+        return state
+
+    stats      = s.get("stats", {}) or {}
+    is_running = bool(s.get("is_running"))
+    status_str = (s.get("status") or "").lower()
+    crawled    = stats.get("crawled", 0)
+
+    # Paused crawl — stop it so the next start_crawl is clean
+    if status_str == "paused":
+        state["was_paused"] = True
+        try:
+            call("POST", "/api/stop_crawl")
+            state["action"] = "stopped_paused"
+        except Exception:
+            pass
+        return state
+
+    # Running — if it has progress within the last minute, leave it alone (caller's choice).
+    # If it's running but stale, force-stop.
+    if is_running or status_str in ("running", "crawling"):
+        state["was_running"] = True
+        last_update = stats.get("last_url_time") or stats.get("start_time") or 0
+        # If we can't measure progress, assume safe to leave alone
+        try:
+            age = time.time() - float(last_update) if last_update else 0
+        except Exception:
+            age = 0
+        if age > 60 or crawled == 0:
+            state["was_stale"] = True
+            try:
+                call("POST", "/api/stop_crawl")
+                # Give the worker thread a tick to release the lock
+                time.sleep(1.5)
+                state["action"] = "stopped_stale"
+            except Exception:
+                pass
+    return state
+
+
 # ── Site-level checks (robots, sitemap, HTTPS, www) ──────────────────────────
 
 def _site_check(base_url: str) -> dict:
@@ -1089,6 +1144,9 @@ def librecrawl_audit(url: str, max_pages: int = 0) -> dict:
         max_pages: Max pages to crawl. 0 = unlimited (default). Set e.g. 500 to
                    cap a large site. Crawls up to 2 hours before timing out.
     """
+    # Reset any stale crawler state so this run starts clean
+    reset_info = _ensure_crawler_ready()
+
     # Start crawl
     settings = {
         "enableJavaScript": False,
@@ -1102,6 +1160,18 @@ def librecrawl_audit(url: str, max_pages: int = 0) -> dict:
     call("POST", "/api/save_settings", json=settings)
     result   = call("POST", "/api/start_crawl", json={"url": url})
     crawl_id = result.get("crawl_id")
+
+    # If start_crawl was rejected because of a lingering "already running" state we missed,
+    # force-stop and retry once before giving up.
+    if not result.get("success") and "already in progress" in str(result.get("message", "")).lower():
+        try:
+            call("POST", "/api/stop_crawl")
+            time.sleep(2)
+            result   = call("POST", "/api/start_crawl", json={"url": url})
+            crawl_id = result.get("crawl_id")
+            reset_info["action"] = "stopped_and_retried"
+        except Exception:
+            pass
 
     if not result.get("success"):
         return {"success": False, "error": result.get("message", "Failed to start crawl")}
@@ -1286,6 +1356,7 @@ def librecrawl_start_crawl(url: str, max_pages: int = 0) -> dict:
     }
     if max_pages > 0:
         settings["maxUrls"] = max_pages
+    _ensure_crawler_ready()
     call("POST", "/api/save_settings", json=settings)
     result   = call("POST", "/api/start_crawl", json={"url": url})
     crawl_id = result.get("crawl_id")
@@ -1829,6 +1900,10 @@ def librecrawl_append_gsc_section(report_path: str, gsc_data: dict) -> dict:
       crawl_errors     — list of {url, response_code, last_crawled}
       search_issues    — list of strings (manual actions, security issues)
       performance      — dict {clicks, impressions, ctr, position}
+                         (or pass these keys flat at the top level — both shapes work)
+      top_queries      — list of {query, clicks, impressions, ctr, position}
+                         from gsc search_analytics_query with dimensions=["query"]
+      date_range       — optional human label e.g. "last 30 days" (shown in header)
 
     Args:
         report_path: Path returned by librecrawl_audit() or librecrawl_generate_report()
@@ -1900,16 +1975,50 @@ def librecrawl_append_gsc_section(report_path: str, gsc_data: dict) -> dict:
             lines.append(f"- 🚨 {issue}")
         lines.append("")
 
+    # Performance metrics — accept nested gsc_data["performance"] OR flat top-level keys
     perf = gsc_data.get("performance") or {}
+    if not perf and any(k in gsc_data for k in ("clicks","impressions","ctr","position")):
+        perf = {k: gsc_data[k] for k in ("clicks","impressions","ctr","position") if k in gsc_data}
+
     if perf:
-        lines.append("### Search Performance (28d)\n")
+        date_range = gsc_data.get("date_range") or "last 28 days"
+        lines.append(f"### Search Performance — {date_range}\n")
         lines.append("| Metric | Value |")
         lines.append("|--------|-------|")
-        if "clicks" in perf:      lines.append(f"| Clicks | {perf['clicks']:,} |")
-        if "impressions" in perf: lines.append(f"| Impressions | {perf['impressions']:,} |")
-        if "ctr" in perf:         lines.append(f"| CTR | {perf['ctr']:.1%} |")
-        if "position" in perf:    lines.append(f"| Avg Position | {perf['position']:.1f} |")
+        if "clicks" in perf:      lines.append(f"| Clicks | {int(perf['clicks']):,} |")
+        if "impressions" in perf: lines.append(f"| Impressions | {int(perf['impressions']):,} |")
+        if "ctr" in perf:         lines.append(f"| CTR | {float(perf['ctr']):.2%} |")
+        if "position" in perf:    lines.append(f"| Avg Position | {float(perf['position']):.1f} |")
         lines.append("")
+
+    # Top queries — most actionable GSC data (where users actually find you)
+    top_queries = gsc_data.get("top_queries") or []
+    if top_queries:
+        lines.append(f"### Top Search Queries ({len(top_queries)})\n")
+        lines.append("> Queries driving impressions/clicks. Optimise the matching pages.\n")
+        lines.append("| Query | Clicks | Impressions | CTR | Position |")
+        lines.append("|-------|--------|-------------|-----|----------|")
+        for q in top_queries[:25]:
+            query  = q.get("query", "")
+            clicks = q.get("clicks", 0)
+            impr   = q.get("impressions", 0)
+            ctr    = q.get("ctr", 0)
+            pos    = q.get("position", 0)
+            try:
+                lines.append(f"| `{query}` | {int(clicks)} | {int(impr):,} | {float(ctr):.2%} | {float(pos):.1f} |")
+            except Exception:
+                lines.append(f"| `{query}` | {clicks} | {impr} | {ctr} | {pos} |")
+        lines.append("")
+
+        # Quick wins: page-2 queries (pos 6-20) with significant impressions
+        opps = [q for q in top_queries
+                if 5 < q.get("position", 0) < 21 and q.get("impressions", 0) > 50]
+        if opps:
+            lines.append("**🎯 Quick wins — page 2 keywords with high impressions:**\n")
+            lines.append("> These rank position 6-20 with significant impressions. Optimise the matching page and you could jump to page 1.\n")
+            for q in opps[:10]:
+                lines.append(f"- `{q['query']}` — position **{float(q['position']):.1f}**, **{int(q['impressions']):,}** impressions, {int(q['clicks'])} clicks")
+            lines.append("")
 
     # GSC checklist
     coverage_by_type = defaultdict(int)
