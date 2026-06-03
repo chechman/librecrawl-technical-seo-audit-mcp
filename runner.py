@@ -258,20 +258,44 @@ def _finalize_session(sid: str, upstream_crawl_id: int, last_delay_ms: int,
     _write_sitemap_recon_csv(recon, recon_csv)
     state.add_artifact(sid, "sitemap_recon_csv", recon_csv)
 
-    # Build completeness from the runner's own knowledge (don't reuse the
-    # legacy _compute_crawl_completeness — its `last_status` shape doesn't
-    # map cleanly to our chunked metrics).
+    # Build completeness — v1.5.1 fix: previously audit_complete was hardcoded
+    # True on the success path. That's wrong when the crawler quit before
+    # exhausting the sitemap. The HARD RULE (per Aditya's audit feedback):
+    #   if sitemap_total > crawl_total and sitemap_only_count > 0,
+    #   audit_complete MUST be False with an incomplete_reasons explainer.
+    sitemap_total      = recon.get("sitemap_total", 0) or 0
+    sitemap_only_count = recon.get("sitemap_only_count", 0) or 0
+    max_pages_hit      = sess["total_max_pages"] > 0 and len(pages) >= sess["total_max_pages"]
+    coverage_pct       = round(100.0 * (1 - sitemap_only_count / max(sitemap_total, 1)), 1) if sitemap_total else None
+
+    incomplete_reasons = []
+    if sitemap_only_count > 0:
+        incomplete_reasons.append(
+            f"sitemap_coverage_partial: {sitemap_total - sitemap_only_count}/{sitemap_total} "
+            f"sitemap URLs crawled ({sitemap_only_count} missed)"
+        )
+    if max_pages_hit:
+        incomplete_reasons.append(
+            f"max_pages_hit: crawler stopped at configured cap of {sess['total_max_pages']}"
+        )
+
+    audit_complete = (len(incomplete_reasons) == 0)
+
     completeness = {
         "crawl_id":             upstream_crawl_id,
         "pages_crawled":        len(pages),
+        "sitemap_total":        sitemap_total,
+        "sitemap_only_count":   sitemap_only_count,
+        "sitemap_coverage_pct": coverage_pct,
         "queued_remaining":     0,
         "max_pages":            sess["total_max_pages"],
-        "max_pages_hit":        sess["total_max_pages"] > 0 and len(pages) >= sess["total_max_pages"],
+        "max_pages_hit":        max_pages_hit,
         "timeout_hit":          False,
         "robots_blocked_count": 0,
         "batch_caps_hit":       False,
         "elapsed_seconds":      round(time.time() - started_session),
-        "audit_complete":       True,
+        "audit_complete":       audit_complete,
+        "incomplete_reasons":   incomplete_reasons,
     }
 
     manifest = _build_checks_manifest(pages, site_data, links or [])
@@ -347,10 +371,21 @@ def _finalize_session(sid: str, upstream_crawl_id: int, last_delay_ms: int,
         "pages": len(pages),
         "delay_at_finish_ms": last_delay_ms,
         "elapsed_s": completeness["elapsed_seconds"],
+        "audit_complete": audit_complete,
+        "sitemap_coverage_pct": coverage_pct,
+        "incomplete_reasons": incomplete_reasons,
     })
 
-    state.update_session(sid, pages_done=len(pages), audit_complete=1)
-    state.set_status(sid, "done")
+    state.update_session(
+        sid,
+        pages_done=len(pages),
+        audit_complete=1 if audit_complete else 0,
+        incomplete_reasons=";".join(incomplete_reasons) if incomplete_reasons else None,
+    )
+    # Status stays "done" either way — artifacts ARE on disk. Coverage truth
+    # lives in audit_complete + incomplete_reasons (visible via audit_status).
+    state.set_status(sid, "done",
+                     detail=("partial: " + "; ".join(incomplete_reasons)) if incomplete_reasons else "complete")
 
 
 # ── Worker thread ─────────────────────────────────────────────────────────────

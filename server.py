@@ -3024,7 +3024,7 @@ def librecrawl_audit_status(session_id: str) -> dict:
         "finished_at":        s.get("finished_at"),
         "eta_seconds":        eta,
         "audit_complete":     bool(s.get("audit_complete")),
-        "incomplete_reasons": (s.get("incomplete_reasons") or "").split(",") if s.get("incomplete_reasons") else [],
+        "incomplete_reasons": (s.get("incomplete_reasons") or "").split(";") if s.get("incomplete_reasons") else [],
         "last_chunks":        chunks,
         "recent_events":      events,
         "artifacts_ready":    s["status"] == "done" and len(arts) > 0,
