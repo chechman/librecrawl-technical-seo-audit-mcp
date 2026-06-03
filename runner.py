@@ -275,6 +275,27 @@ def _finalize_session(sid: str, upstream_crawl_id: int, last_delay_ms: int,
     }
 
     manifest = _build_checks_manifest(pages, site_data, links or [])
+
+    # External-link validator (v1.4.1) — catches the 4xx/5xx/dns/redirect
+    # failures upstream LibreCrawl leaves as target_status:null.
+    try:
+        import external_links
+        ext_csv = REPORTS_DIR / f"{domain}-{timestamp}.external-links.csv"
+        ext_summary = external_links.audit_external_links(
+            pages, url, ext_csv, links=links,
+            max_workers=10, timeout_seconds=10.0,
+        )
+        state.add_artifact(sid, "external_links_csv", ext_csv)
+        state.log_event(sid, "external_links_audited", {
+            "total":  ext_summary.get("total_external_links", 0),
+            "broken": ext_summary.get("broken_count", 0),
+            "by_class": ext_summary.get("by_status_class", {}),
+        })
+    except Exception as e:
+        # Never fail the whole finalize on external-link audit issues —
+        # the .md report + per-page CSV are the primary artifacts.
+        state.log_event(sid, "external_links_audit_failed", str(e))
+
     state.log_event(sid, "finalized", {
         "pages": len(pages),
         "delay_at_finish_ms": last_delay_ms,

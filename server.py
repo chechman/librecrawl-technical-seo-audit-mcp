@@ -2932,6 +2932,76 @@ def librecrawl_pagespeed_audit_all_crawl_pages(crawl_id: int, strategy: str = "m
 
 
 @mcp.tool()
+def librecrawl_external_links_audit(crawl_id: int, max_workers: int = 10,
+                                     timeout_seconds: float = 10.0) -> dict:
+    """
+    NEW IN v1.4.1 — validate every external (outbound) link from a crawl.
+
+    Closes the gap LibreCrawl's upstream leaves open: the export captures
+    every outbound URL but doesn't HEAD/GET them, so target_status sits at
+    null. This tool fetches each unique external target with a concurrent
+    HEAD pool (GET fallback when HEAD is blocked), follows redirects, and
+    classifies the result Screaming-Frog-style.
+
+    Output: writes <domain>-<ts>.external-links.csv next to the crawl's
+    other artifacts. Columns: target_url, status_code, status_class,
+    final_url, redirect_count, error_reason, content_type, response_time_ms,
+    server, last_modified, source_pages_count, first_source, first_anchor,
+    all_sources_pipe.
+
+    Status classes: ok / ok_after_redirect / redirect / forbidden / not_found
+    / gone / client_error_4xx / server_error_5xx / timeout / dns_error /
+    ssl_error / connection_refused / malformed_url / protocol_error / skipped.
+
+    USE THIS when asked to:
+    - "check all external links", "broken external links", "outbound link audit"
+    - "find 404 / 403 external links", "validate outgoing URLs"
+    - "Screaming Frog External tab equivalent"
+
+    Args:
+        crawl_id:        ID from librecrawl_list_crawls.
+        max_workers:     Concurrent HEAD requests (default 10). Higher = faster,
+                         but watch your bandwidth and any per-target rate limits.
+        timeout_seconds: Per-request timeout (default 10s).
+    """
+    from datetime import datetime
+    from pathlib import Path
+    import external_links
+
+    try:
+        call("POST", f"/api/crawls/{crawl_id}/load")
+        r = get_client().post(f"{BASE}/api/export_data",
+                              json={"format": "json", "fields": EXPORT_FIELDS},
+                              timeout=300)
+        r.raise_for_status()
+        pages, links = _parse_export(r.json())
+    except Exception as e:
+        return {"success": False, "error": f"Could not load crawl {crawl_id}: {e}"}
+
+    if not pages:
+        return {"success": False, "error": "Crawl has no pages exported."}
+
+    base_url = ""
+    for p in pages:
+        u = p.get("url") or ""
+        if u:
+            parsed = urlparse(u)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            break
+
+    domain = base_url.replace("https://", "").replace("http://", "").rstrip("/").split("/")[0]
+    ts = datetime.now().strftime("%Y%m%d-%H%M")
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = REPORTS_DIR / f"{domain}-{ts}.external-links.csv"
+
+    summary = external_links.audit_external_links(
+        pages, base_url, out_path, links=links,
+        max_workers=max_workers, timeout_seconds=timeout_seconds,
+    )
+    return {"success": True, "crawl_id": crawl_id, "base_url": base_url, "links_in_export": len(links), **summary}
+
+
+@mcp.tool()
 def librecrawl_brain_purge_audit(crawl_id: int) -> dict:
     """
     Delete a crawl's data from the upstream LibreCrawl database after the
