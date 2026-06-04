@@ -894,15 +894,29 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
 
     sep()
 
-    # ── Redirects ─────────────────────────────────────────────────────────────
+    # ── Redirects (v1.7 — now shows destination + hop count) ─────────────────
     if redirect:
         h(2, f"↪️ Redirects ({len(redirect)} pages)")
         lines.append("> **Fix:** Update internal links to point to the final destination URL. "
                      "Each redirect wastes crawl budget and loses a fraction of link equity.\n")
+        lines.append("| Source URL | Status | Destination | Hops |")
+        lines.append("|------------|--------|-------------|------|")
         for url in redirect[:20]:
-            li(f"`{url}`")
+            page = next((p for p in pages if p.get("url") == url), {})
+            status = page.get("status_code", "?")
+            chain = page.get("redirects") or []
+            canonical = (page.get("canonical_url") or "").strip()
+            # Destination preference: last entry in redirect chain → canonical_url → unknown
+            destination = ""
+            if isinstance(chain, list) and chain:
+                destination = chain[-1] if chain[-1] != url else (chain[-2] if len(chain) > 1 else "")
+            if not destination and canonical and canonical != url:
+                destination = canonical
+            hops = len(chain) if isinstance(chain, list) else 0
+            dst_str = f"`{destination}`" if destination else "*(not captured)*"
+            lines.append(f"| `{url}` | {status} | {dst_str} | {hops} |")
         if len(redirect) > 20:
-            lines.append(f"… and {len(redirect)-20} more")
+            lines.append(f"\n… and {len(redirect)-20} more")
         lines.append("")
         sep()
 

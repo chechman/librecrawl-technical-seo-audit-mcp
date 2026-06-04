@@ -77,6 +77,40 @@ SECURITY_HEADERS = {
     "missing_referrer_policy":          "referrer-policy",
 }
 
+# ── v1.7 Tier 1 constants ─────────────────────────────────────────────────────
+
+# WAF / bot-block challenge fingerprints. Each entry: (waf_name, [body_substr])
+# Pages that match return 200 OK with these body markers but a real human / bot
+# would see a JS challenge or CAPTCHA. Tool reports "clean" → wrong; flag it.
+WAF_FINGERPRINTS = [
+    ("cloudflare",  ["cf-browser-verification", "checking your browser before accessing",
+                     "cf-challenge-running", "cloudflare ray id",
+                     "ray id:", "/cdn-cgi/challenge-platform/",
+                     "please enable cookies and reload the page"]),
+    ("akamai",       ["pixel_d9c66e4d", "akamai bot manager", "ak-bmsc",
+                     "reference&#32;number:", "_abck=", "bm-sz="]),
+    ("datadome",     ["geo.captcha-delivery.com", "datadome", "dd_cookie_test"]),
+    ("imperva",      ["imperva", "incapsula incident id", "_incap_ses",
+                     "incident id:", "visid_incap"]),
+    ("perimeterx",   ["perimeterx", "_px3=", "px-captcha",
+                     "are you a robot?"]),
+]
+
+# Soft-redirect detection patterns
+META_REFRESH_RE = re.compile(
+    r'<meta[^>]+http-equiv\s*=\s*["\']refresh["\'][^>]+content\s*=\s*["\']\s*\d+\s*;\s*url\s*=\s*([^"\'>\s]+)',
+    re.IGNORECASE,
+)
+JS_REDIRECT_RE = re.compile(
+    r'(?:window|document|top|self|parent)\.location(?:\.href|\.replace\(|\s*=)\s*[\(=]?\s*["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+
+# Broken-bookmark detection: extract every <a href="#xyz"> and every id="xyz"
+# (or name="xyz" for legacy <a name=…>) from the same HTML, diff.
+ANCHOR_HREF_RE = re.compile(r'<a\s+[^>]*href\s*=\s*["\']#([^"\'\s]+)', re.IGNORECASE)
+ID_NAME_RE     = re.compile(r'\b(?:id|name)\s*=\s*["\']([^"\'\s]+)', re.IGNORECASE)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -416,6 +450,61 @@ def _check_from_response(url: str, resp, status: int, headers: dict,
                 findings.append(("soft_404",
                                  f"200 status + {body_len}-char body + signal: {phrase_hits[0]}"))
 
+    # ── v1.7 Tier 1 ──────────────────────────────────────────────────────────
+
+    # HTTP `Refresh:` response header — soft redirect at the header layer
+    refresh_hdr = headers.get("refresh") or headers.get("Refresh") or ""
+    if refresh_hdr:
+        findings.append((
+            "http_refresh_redirect",
+            f"HTTP Refresh header present: {refresh_hdr[:200]}",
+        ))
+
+    # `<meta http-equiv="refresh" content="N; url=...">` soft redirect
+    if body:
+        mr_match = META_REFRESH_RE.search(body)
+        if mr_match:
+            findings.append((
+                "meta_refresh_redirect",
+                f"<meta refresh> to {mr_match.group(1)[:200]}",
+            ))
+
+        # JS-based redirects — `window.location = "..."` and friends.
+        # Heuristic only (we don't render JS). Cap at first 3 matches.
+        js_hits = JS_REDIRECT_RE.findall(body)
+        if js_hits:
+            uniq = list(dict.fromkeys(js_hits))[:3]
+            findings.append((
+                "js_redirect",
+                f"JS location-assignment to: {', '.join(uniq)}",
+            ))
+
+        # WAF / bot-block challenge fingerprint. Any matching marker = the
+        # bot/audit may have been served a challenge page rather than the
+        # real content. Tool reports "200 OK" but the page isn't useful.
+        body_lower = body.lower()
+        for waf_name, markers in WAF_FINGERPRINTS:
+            hits = [m for m in markers if m in body_lower]
+            if hits:
+                findings.append((
+                    "bot_block_challenge_detected",
+                    f"{waf_name} challenge page detected (markers: {hits[0]})",
+                ))
+                break   # one WAF flag is enough per page
+
+        # Broken bookmarks — <a href="#xyz"> with no matching id/name on the
+        # same page. Caps at first 5 in the detail string to keep CSVs tidy.
+        if 200 <= status < 300:
+            hrefs = set(ANCHOR_HREF_RE.findall(body))
+            ids   = set(ID_NAME_RE.findall(body))
+            broken = sorted(hrefs - ids - {"", "top"})  # "#top" usually scrolls home
+            if broken:
+                findings.append((
+                    "broken_bookmarks",
+                    f"{len(broken)} broken #fragments — first: "
+                    f"{', '.join('#' + b for b in broken[:5])}",
+                ))
+
     return findings
 
 
@@ -504,9 +593,16 @@ def run_extended_checks(pages: list, base_url: str, output_path: Path,
             except Exception:
                 body = ""
             for check, detail in _check_from_response(url, resp, status, headers, body):
-                sev = "high" if check == "soft_404" else "medium"
-                if check == "mixed_content":
+                # Severity tiering. high = audit data suspect or page broken;
+                # medium = real-issue surface; low = stylistic.
+                if check in ("soft_404", "mixed_content",
+                             "bot_block_challenge_detected"):
                     sev = "high"
+                elif check in ("meta_refresh_redirect", "js_redirect",
+                               "http_refresh_redirect", "broken_bookmarks"):
+                    sev = "medium"
+                else:
+                    sev = "medium"
                 findings.append((url, check, sev, detail))
 
     # Write CSV
