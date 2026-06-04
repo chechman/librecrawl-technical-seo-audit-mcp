@@ -41,7 +41,10 @@ class _SEOExtractor(HTMLParser):
     Avoids BeautifulSoup so the venv install footprint stays small.
     Captures: title, meta(name=description|robots|viewport), <html lang>,
     <link rel=canonical>, og:* + twitter:*, h1/h2/h3 text, images-with-alt,
-    JSON-LD script blocks, total word count.
+    JSON-LD script blocks, total word count, AND <a href> outbound links
+    from the page body (v1.6.2 — needed so sitemap_fill pages contribute
+    to the site's inbound-link graph and orphan detection works correctly
+    without the source=='sitemap_fill' workaround).
     """
 
     def __init__(self):
@@ -62,6 +65,7 @@ class _SEOExtractor(HTMLParser):
         self.images = []
         self.json_ld = []
         self.word_count = 0
+        self.links_detailed = []        # body <a href> list
         self._in_title = False
         self._in_h = None              # "h1"/"h2"/"h3"
         self._h_buf = []
@@ -69,6 +73,9 @@ class _SEOExtractor(HTMLParser):
         self._script_buf = []
         self._body_text_buf = []
         self._in_head = False
+        self._in_a = False
+        self._a_attrs = {}
+        self._a_buf = []
 
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
@@ -115,6 +122,18 @@ class _SEOExtractor(HTMLParser):
                 "src": a.get("src", "") or a.get("data-src", ""),
                 "alt": a.get("alt", ""),
             })
+        elif tag == "a":
+            # Only capture anchors with an href in body (skip head/title/h tag scope).
+            href = (a.get("href") or "").strip()
+            if href and not self._in_head:
+                self._in_a = True
+                self._a_attrs = {
+                    "href":   href,
+                    "rel":    (a.get("rel") or "").strip(),
+                    "target": (a.get("target") or "").strip(),
+                    "title":  (a.get("title") or "").strip(),
+                }
+                self._a_buf = []
         elif tag == "script":
             if (a.get("type") or "").lower() == "application/ld+json":
                 self._in_script_jsonld = True
@@ -135,6 +154,20 @@ class _SEOExtractor(HTMLParser):
                 self.h3.append(text[:300])
             self._in_h = None
             self._h_buf = []
+        elif tag == "a" and self._in_a:
+            anchor = "".join(self._a_buf).strip()
+            self.links_detailed.append({
+                "url":         self._a_attrs.get("href", ""),
+                "href":        self._a_attrs.get("href", ""),
+                "anchor":      anchor[:280],
+                "anchor_text": anchor[:280],
+                "rel":         self._a_attrs.get("rel", ""),
+                "target":      self._a_attrs.get("target", ""),
+                "title":       self._a_attrs.get("title", ""),
+            })
+            self._in_a = False
+            self._a_buf = []
+            self._a_attrs = {}
         elif tag == "script" and self._in_script_jsonld:
             self._in_script_jsonld = False
             raw = "".join(self._script_buf).strip()
@@ -146,8 +179,14 @@ class _SEOExtractor(HTMLParser):
             self.title += data
         elif self._in_h:
             self._h_buf.append(data)
+            if self._in_a:
+                self._a_buf.append(data)
         elif self._in_script_jsonld:
             self._script_buf.append(data)
+        elif self._in_a:
+            self._a_buf.append(data)
+            if not self._in_head:
+                self._body_text_buf.append(data)
         elif not self._in_head:
             self._body_text_buf.append(data)
 
@@ -245,6 +284,49 @@ async def _fetch_one(url: str, client: httpx.AsyncClient,
         page["hreflang"]          = extractor.hreflang
         page["images"]            = extractor.images[:200]
         page["word_count"]        = extractor.word_count
+
+        # v1.6.2: normalise + classify outbound links so they can feed the
+        # inbound-link graph in _build_report. Skip mailto/tel/javascript/#
+        # — only http(s) links contribute. internal_links / external_links
+        # counts mirror LibreCrawl's per-page numerics.
+        final_base = page["url"]   # final URL post-redirect
+        from urllib.parse import urlparse, urljoin
+        base_host = (urlparse(final_base).hostname or "").lower()
+        normalised, internal_n, external_n = [], 0, 0
+        for lk in extractor.links_detailed[:500]:   # cap to avoid runaway
+            href = lk.get("href") or ""
+            if not href:
+                continue
+            href_clean = href.split("#", 1)[0].strip()
+            if not href_clean:
+                continue
+            low = href_clean.lower()
+            if low.startswith(("mailto:", "tel:", "javascript:", "sms:", "data:")):
+                continue
+            try:
+                abs_url = href_clean if urlparse(href_clean).scheme \
+                          else urljoin(final_base, href_clean)
+            except Exception:
+                continue
+            host = (urlparse(abs_url).hostname or "").lower()
+            if not host:
+                continue
+            is_internal = (host == base_host)
+            if is_internal:
+                internal_n += 1
+            else:
+                external_n += 1
+            normalised.append({
+                "url":         abs_url,
+                "href":        abs_url,
+                "anchor":      lk.get("anchor", ""),
+                "anchor_text": lk.get("anchor_text", ""),
+                "rel":         lk.get("rel", ""),
+                "is_internal": is_internal,
+            })
+        page["links_detailed"] = normalised
+        page["internal_links"] = internal_n
+        page["external_links"] = external_n
 
     except httpx.ReadTimeout:
         page["error_type"] = "timeout"

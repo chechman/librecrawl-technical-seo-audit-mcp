@@ -328,8 +328,10 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
     parsed_base = urlparse(base_url)
     base_host   = parsed_base.netloc or domain
 
-    # ── Build reverse link map (source of broken links) ──────────────────────
-    # Prefer flat links file (LibreCrawl multi-file export); fall back to links_detailed per page
+    # ── Build reverse link map (source of broken links + inbound link counts) ─
+    # v1.6.2: walk BOTH the standalone LibreCrawl links file AND each page's
+    # links_detailed (which now includes sitemap_fill in-content links).
+    # Was: if/else — only one source was used, so sitemap_fill links were lost.
     inbound = defaultdict(list)   # target_url → [source_urls]
     if links:
         for lk in links:
@@ -337,15 +339,32 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
             tgt = lk.get("target_url", "")
             if src and tgt:
                 inbound[tgt].append(src)
-    else:
-        for p in pages:
-            src      = p.get("url", "")
-            pg_links = p.get("links_detailed") or []
-            if isinstance(pg_links, list):
-                for lk in pg_links:
-                    tgt = lk.get("url") or lk.get("href") or ""
-                    if tgt:
-                        inbound[tgt].append(src)
+    for p in pages:
+        src      = p.get("url", "")
+        pg_links = p.get("links_detailed") or []
+        if not isinstance(pg_links, list):
+            continue
+        for lk in pg_links:
+            tgt = lk.get("url") or lk.get("href") or ""
+            if tgt and src:
+                inbound[tgt].append(src)
+
+    # Augment each page's linked_from with what we discovered from in-content
+    # links. LibreCrawl-crawled pages already have linked_from populated by
+    # upstream; sitemap_fill pages get theirs from this pass. Union-merge so
+    # we never overwrite real data.
+    for p in pages:
+        u = (p.get("url") or "").rstrip("/")
+        if not u:
+            continue
+        existing = set(p.get("linked_from") or [])
+        # Match both with and without trailing slash variants
+        candidates = set(inbound.get(p.get("url") or "", []))
+        candidates |= set(inbound.get(u, []))
+        candidates |= set(inbound.get(u + "/", []))
+        merged = sorted(existing | {c for c in candidates if c and c != p.get("url")})
+        if merged:
+            p["linked_from"] = merged
 
     # ── Categorise pages ──────────────────────────────────────────────────────
     status_buckets   = defaultdict(list)
@@ -461,13 +480,11 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
             if isinstance(b_images, list) and b_images:
                 broken_img_pages.append((url, len(b_images), b_images[:5]))
 
-            # Orphan page (no inbound links at all). v1.6.1: skip pages added
-            # by sitemap_fill — those have linked_from=[] because we only
-            # fetched them once, didn't crawl FROM them. They're listed in
-            # the sitemap.xml so the sitemap IS the inbound signal. Marking
-            # them all as orphans would inflate the count by the entire
-            # sitemap_fill set (false positive).
-            if not linked_from and p.get("source") != "sitemap_fill":
+            # Orphan page (no inbound links at all). v1.6.2: now safe to apply
+            # uniformly — sitemap_fill pages extract their in-content <a href>
+            # links so the inbound graph reaches them just like LibreCrawl-
+            # crawled pages. The earlier v1.6.1 exclusion is no longer needed.
+            if not linked_from:
                 orphan_pages.append(url)
 
             # Redirect chain (page itself underwent >1 redirect to get here)
@@ -558,8 +575,9 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         if sitemap_fill_count:
             lines.append(f"> - **Sitemap-fill pages:** {sitemap_fill_count} of the "
                          f"{total} pages were added via the lightweight sitemap "
-                         f"fill (no inbound/outbound link graph — orphan flag "
-                         f"is disabled for these).")
+                         f"fill. Their `<a href>` outbound links are extracted "
+                         f"and feed the inbound-link graph, so orphan detection "
+                         f"applies to them just like LibreCrawl-crawled pages.")
         for r in reasons:
             lines.append(f"> - {r}")
         lines.append("")
@@ -1279,7 +1297,7 @@ def _build_checks_manifest(pages: list, site_data: dict, links: list) -> dict:
             no_alt = sum(1 for i in imgs if isinstance(i, dict) and not (i.get("alt") or "").strip())
             if no_alt: fails["missing_alt_pages"] += 1
         if isinstance(bimg, list) and bimg: fails["broken_img_pages"] += 1
-        if not lkfrm and p.get("source") != "sitemap_fill":
+        if not lkfrm:
             fails["orphan_pages"] += 1
         if isinstance(rdr, list) and len(rdr) > 1: fails["redirect_chains"] += 1
         og_t = og.get("og:title") or og.get("title") or ""
@@ -1459,7 +1477,7 @@ _PER_PAGE_CHECKS = [
     ("noindex",             lambda p: "noindex" in (p.get("robots") or "").lower()),
     ("large_page_500kb",    lambda p: (p.get("size") or 0) > 500_000),
     ("missing_viewport",    lambda p: not (p.get("viewport") or "").strip() and str(p.get("status_code","")).startswith("2")),
-    ("orphan_page",         lambda p: not (p.get("linked_from") or []) and str(p.get("status_code","")).startswith("2") and p.get("source") != "sitemap_fill"),
+    ("orphan_page",         lambda p: not (p.get("linked_from") or []) and str(p.get("status_code","")).startswith("2")),
     ("redirect_chain",      lambda p: isinstance(p.get("redirects"), list) and len(p.get("redirects") or []) > 1),
     ("status_4xx",          lambda p: str(p.get("status_code","")).startswith("4")),
     ("status_5xx",          lambda p: str(p.get("status_code","")).startswith("5")),
