@@ -330,23 +330,11 @@ def _finalize_session(sid: str, upstream_crawl_id: int, last_delay_ms: int,
         "incomplete_reasons":   incomplete_reasons,
     }
 
-    # Now build the Markdown report — passing completeness so it can render
-    # the coverage-warning banner up top when audit is partial.
-    report_md = _build_report(pages, url, upstream_crawl_id or 0,
-                              site_data=site_data, links=links,
-                              completeness=completeness)
-    md_path = REPORTS_DIR / f"{domain}-{timestamp}.md"
-    md_path.write_text(report_md, encoding="utf-8")
-    state.add_artifact(sid, "md", md_path)
-
-    per_page_csv = REPORTS_DIR / f"{domain}-{timestamp}.per-page.csv"
-    _write_per_page_csv(pages, per_page_csv)
-    state.add_artifact(sid, "per_page_csv", per_page_csv)
-
-    manifest = _build_checks_manifest(pages, site_data, links or [])
-
-    # External-link validator (v1.4.1) — catches the 4xx/5xx/dns/redirect
-    # failures upstream LibreCrawl leaves as target_status:null.
+    # v2.0.2 — external-link validator runs BEFORE the MD report build so
+    # broken external URLs + counts can be surfaced in the report's Summary
+    # scorecard and a dedicated "Broken External Links" section. Was buried
+    # in the .external-links.csv sidecar only; now first-class in the PDF.
+    ext_summary = None
     try:
         import external_links
         ext_csv = REPORTS_DIR / f"{domain}-{timestamp}.external-links.csv"
@@ -364,6 +352,23 @@ def _finalize_session(sid: str, upstream_crawl_id: int, last_delay_ms: int,
         # Never fail the whole finalize on external-link audit issues —
         # the .md report + per-page CSV are the primary artifacts.
         state.log_event(sid, "external_links_audit_failed", str(e))
+
+    # Now build the Markdown report — passing completeness for the partial-
+    # coverage banner AND external_links_summary so broken externals are
+    # surfaced in the Summary + Critical sections.
+    report_md = _build_report(pages, url, upstream_crawl_id or 0,
+                              site_data=site_data, links=links,
+                              completeness=completeness,
+                              external_links_summary=ext_summary)
+    md_path = REPORTS_DIR / f"{domain}-{timestamp}.md"
+    md_path.write_text(report_md, encoding="utf-8")
+    state.add_artifact(sid, "md", md_path)
+
+    per_page_csv = REPORTS_DIR / f"{domain}-{timestamp}.per-page.csv"
+    _write_per_page_csv(pages, per_page_csv)
+    state.add_artifact(sid, "per_page_csv", per_page_csv)
+
+    manifest = _build_checks_manifest(pages, site_data, links or [])
 
     # Content audit (v1.5) — paragraph-level checks (readability, AI-tells,
     # passive voice, lorem ipsum, boilerplate). Fetches first 50 pages by

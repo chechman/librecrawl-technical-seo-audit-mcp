@@ -311,7 +311,8 @@ def _site_check(base_url: str) -> dict:
 
 def _build_report(pages: list, base_url: str, crawl_id: int,
                   site_data: dict = None, links: list = None,
-                  completeness: dict = None) -> str:
+                  completeness: dict = None,
+                  external_links_summary: dict = None) -> str:
     """Generate a structured Markdown SEO audit report from crawl export data.
 
     v1.6.1: accepts an optional `completeness` dict (the same one the runner
@@ -616,11 +617,49 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
     lines.append(f"| Redirect chains (>1 hop) | {len(redirect_chains)} | {'✅' if not redirect_chains else '⚠️'} |")
     lines.append(f"| Missing OG tags | {len(missing_og_pages)} | {'✅' if not missing_og_pages else '⚠️'} |")
     lines.append(f"| Missing viewport meta | {len(missing_viewport)} | {'✅' if not missing_viewport else '🔴'} |")
+
+    # v2.0.2 — external links surfaced in Summary scorecard
+    if external_links_summary:
+        els = external_links_summary
+        ext_total  = els.get("total_external_links", 0) or 0
+        ext_broken = els.get("broken_count", 0) or 0
+        ext_redir  = els.get("redirect_count", 0) or 0
+        ext_skip   = els.get("skipped_total", els.get("skipped_non_http", 0)) or 0
+        lines.append(f"| **External links audited** | **{ext_total}** | |")
+        lines.append(f"| External links — broken (4xx/5xx/timeout/DNS/SSL) | {ext_broken} | {'✅' if not ext_broken else '🔴'} |")
+        lines.append(f"| External links — followed redirect (3xx) | {ext_redir} | {'✅' if not ext_redir else '⚠️'} |")
+        lines.append(f"| External links — skipped (mailto/tel/javascript) | {ext_skip} | |")
+
     lines.append("")
     sep()
 
     # ── CRITICAL ──────────────────────────────────────────────────────────────
     h(2, "🔴 Critical — Fix First")
+
+    # v2.0.2 — broken external links surfaced in the Critical section.
+    # Pulled from `top_broken` in the external-links summary (already capped
+    # to first 50 broken in external_links.py). Each row shows the source
+    # page that links to it so the operator can fix the bad internal link.
+    if external_links_summary and external_links_summary.get("top_broken"):
+        ext_broken = external_links_summary.get("broken_count", 0) or 0
+        top = external_links_summary.get("top_broken") or []
+        h(3, f"🔗 Broken External Links ({ext_broken})")
+        lines.append("> **Fix:** Update the linking page to point at a working URL "
+                     "or remove the link. 4xx / 5xx / timeout / DNS / SSL failures "
+                     "all hurt user trust and waste crawl budget if the target "
+                     "becomes a redirect chain.\n")
+        lines.append("| Target URL | Status | Source page | Anchor |")
+        lines.append("|------------|--------|-------------|--------|")
+        for row in top[:25]:
+            tgt    = (row.get("target") or "")[:80]
+            sc     = row.get("status_code") or row.get("status_class") or "?"
+            cls    = row.get("status_class") or ""
+            src    = (row.get("source") or "")[:60]
+            anchor = (row.get("anchor") or "—")[:40].replace("|", " ")
+            lines.append(f"| `{tgt}` | {sc} ({cls}) | `{src}` | {anchor} |")
+        if len(top) > 25:
+            lines.append(f"\n*…and {len(top)-25} more — see `<domain>-<ts>.external-links.csv` for the full list.*")
+        lines.append("")
 
     # Broken pages with source
     if broken:
