@@ -3,6 +3,44 @@ name: librecrawl-audit
 description: Run a full technical SEO audit on any website via the librecrawl-mcp MCP server. Use when the user asks for "audit X site", "SEO check", "broken link sweep", "Screaming Frog this site", "schema validation", "site health report", "core web vitals scan", "find missing meta / H1 / canonical", "sitemap audit", "external link check", or any phrase indicating they want a comprehensive technical SEO audit on a live URL. Returns a PDF + 7 sidecar CSVs as a zip. Server is ephemeral — once you download the zip, the audit is gone from the server.
 ---
 
+# ⚠️ MANDATORY RULES — read first, no exceptions
+
+These are hard rules. If you skip any of them, the audit is broken from the user's perspective even if the MCP call succeeded.
+
+## Rule 1: ALWAYS save the zip locally
+
+After `librecrawl_audit_zip` returns, you MUST decode the `content_base64` and write it to a **local file on the operator's machine**. Use the user's current working directory (or `~/Downloads/<filename>`). Use exactly the `filename` field from the response.
+
+Pseudo-code your runtime should execute:
+```python
+import base64
+local_path = filename   # use the filename field from the response, e.g. "example.com-1780572742.zip"
+with open(local_path, "wb") as f:
+    f.write(base64.b64decode(content_base64))
+```
+
+You report the LOCAL path back to the user. **NEVER** report the `zip_path` field from the response as the deliverable — that path is on the **remote server**, not on the operator's local machine. The user cannot open it.
+
+## Rule 2: ALWAYS use `auto_cleanup=True`
+
+Default and only sane choice. The user contract is: server forgets the audit the moment they have the zip. Do NOT pass `auto_cleanup=False` — it leaves audit data sitting on the remote server. If a user explicitly says "keep the data on the server", confirm twice and only then opt out.
+
+## Rule 3: After saving, verify + tell the user the LOCAL path
+
+Pattern your final response on this:
+
+> ✅ Audit done.
+> Saved locally: `./example.com-1780572742.zip` (320 KB · sha256 verified)
+> Contents: SUMMARY.txt + PDF report + 7 CSVs (per-page · sitemap-recon · external-links · content-audit · extended-checks).
+> Server forgot the session — it's not stored anywhere remote.
+
+Do **not** say:
+> ❌ "Zip created: /home/posimyth-brain/librecrawl-reports/example.com-XXXX.zip"
+
+That path is on the server. Useless to the user.
+
+---
+
 # librecrawl-audit
 
 Drive the librecrawl-mcp MCP server to produce a complete technical SEO audit of any website. The MCP exposes 37 tools at `mcp__librecrawl-posi__*` (or whatever the local connector name is in the user's config).
@@ -81,16 +119,18 @@ librecrawl_audit_zip(session_id, auto_cleanup=True) → {
 }
 ```
 
-`auto_cleanup=True` (default) is what you want for normal usage. The server deletes every trace of the audit after this call returns. The base64 zip in the response IS the only copy — save it.
+`auto_cleanup=True` is mandatory (see Rule 2). The server deletes every trace of the audit after this call returns. The base64 zip in the response IS the only copy.
 
-**Save to disk** with something like:
+**Save to disk IMMEDIATELY** before reporting back to the user — this is Rule 1, non-negotiable:
 ```python
 import base64
-with open(filename, "wb") as f:
+local_path = filename   # exactly the response.filename field
+with open(local_path, "wb") as f:
     f.write(base64.b64decode(content_base64))
+print(f"Saved locally: {local_path}")
 ```
 
-Or use `zip_path` if base64 inflation in your context is a concern.
+⚠️ The response also includes a `zip_path` field — that path is on the **remote server**, NOT on the operator's machine. It's there for forensics only. DO NOT report it as the deliverable. The local file (saved by the snippet above) is what the user opens.
 
 ### 4. Help the user open / inspect the zip
 

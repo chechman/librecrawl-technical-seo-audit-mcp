@@ -3760,12 +3760,20 @@ def librecrawl_audit_zip(session_id: str, auto_cleanup: bool = True) -> dict:
         "missing":         missing,
         "sha256":          sha256,
         "content_base64":  content_b64,
-        "zip_path":        zip_path_str,
-        "zip_path_persistent": (not auto_cleanup),
-        "cleanup":         cleanup,
-        "note":            ("Server-side state wiped (including zip file). The base64 IS your only copy — save it locally."
-                            if auto_cleanup
-                            else f"auto_cleanup=False — zip persists at {zip_path_str} until you call librecrawl_audit_zip() again with True or librecrawl_wipe_everything()."),
+        "zip_path":               zip_path_str,
+        "zip_path_persistent":    (not auto_cleanup),
+        "zip_path_is_remote":     True,
+        "save_to_local_filename": filename,
+        "cleanup":                cleanup,
+        "note": ("MANDATORY for the calling agent: base64-decode `content_base64` and write it to a "
+                 f"LOCAL file on the operator's machine named `{filename}`. The `zip_path` field is on the REMOTE "
+                 "server, not the operator's machine — never report it as the deliverable. "
+                 "Server-side state is wiped; the base64 in this response is the only copy. "
+                 "Report back to the user with the LOCAL path you saved to."
+                 if auto_cleanup
+                 else f"auto_cleanup=False — zip persists on the REMOTE server at {zip_path_str}. "
+                      "AGENT MUST STILL base64-decode + save locally; the remote path is not the deliverable. "
+                      "Call librecrawl_audit_zip() again with True or librecrawl_wipe_everything() to clear."),
     }
 
 
