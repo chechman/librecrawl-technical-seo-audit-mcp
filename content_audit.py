@@ -1,5 +1,5 @@
 """
-Content quality audit module (librecrawl-technical-seo-audit-mcp v1.5).
+Content quality audit module (librecrawl-mcp v1.5).
 
 Operates on a finished crawl's page list. LibreCrawl's per-page export does
 NOT include full body text — only title, meta description, headings, and
@@ -267,7 +267,7 @@ async def _fetch_one(url: str, client: httpx.AsyncClient,
     try:
         r = await client.get(url, timeout=timeout_s, follow_redirects=True,
                               headers={
-                                  "User-Agent": "LibreCrawl-MCP/1.5 (Content Audit; +https://github.com/adityaarsharma/librecrawl-technical-seo-audit-mcp)",
+                                  "User-Agent": "LibreCrawl-MCP/1.5 (Content Audit; +https://github.com/adityaarsharma/librecrawl-mcp)",
                                   "Accept": "text/html,*/*;q=0.5",
                               })
         if r.status_code >= 400:
@@ -344,13 +344,15 @@ def audit_content(pages: list, output_path: Path, limit: int = 250,
     # Fetch all pages concurrently
     fetch_results = []
     if target_urls:
-        loop = asyncio.new_event_loop()
-        try:
-            fetch_results = loop.run_until_complete(
-                _fetch_all(target_urls, max_workers, timeout_seconds)
-            )
-        finally:
-            loop.close()
+        # Python 3.12: asyncio.run() handles event-loop create/close + transport
+        # cleanup atomically. The old new_event_loop()+close() pattern leaked
+        # closed-loop references between sequential module calls in the runner
+        # thread (extended_checks ran after content_audit ran after external_links
+        # in the same worker — httpx.AsyncClient's internal asyncio.get_event_loop()
+        # calls resolved to a previous module's already-closed loop).
+        fetch_results = asyncio.run(
+            _fetch_all(target_urls, max_workers, timeout_seconds)
+        )
 
     # Build text-by-url map for boilerplate detection
     texts_by_url = {}

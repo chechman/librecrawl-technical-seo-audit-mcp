@@ -171,7 +171,7 @@ async def _validate_one(target: str, client: httpx.AsyncClient,
         return await client.request(
             method, target, timeout=timeout_s, follow_redirects=True,
             headers={
-                "User-Agent": "LibreCrawl-MCP/1.4 (External Link Validator; +https://github.com/adityaarsharma/librecrawl-technical-seo-audit-mcp)",
+                "User-Agent": "LibreCrawl-MCP/1.4 (External Link Validator; +https://github.com/adityaarsharma/librecrawl-mcp)",
                 "Accept": "text/html,*/*;q=0.5",
             },
         )
@@ -345,13 +345,13 @@ def audit_external_links(pages: list, base_url: str, output_path,
     targets = list(validate_map.keys())
 
     if targets:
-        loop = asyncio.new_event_loop()
-        try:
-            results = loop.run_until_complete(
-                _validate_all(targets, max_workers, timeout_seconds)
-            )
-        finally:
-            loop.close()
+        # Python 3.12: asyncio.run() — see v2.0.6 fix comment in content_audit.py.
+        # external_links was the only module that worked under the old pattern
+        # because it runs FIRST in the finalize sequence (clean asyncio state),
+        # but the same risk applies — patching for consistency + future-proofing.
+        results = asyncio.run(
+            _validate_all(targets, max_workers, timeout_seconds)
+        )
     else:
         results = []
 

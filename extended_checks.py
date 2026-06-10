@@ -1,5 +1,5 @@
 """
-Extended SEO checks pack (librecrawl-technical-seo-audit-mcp v1.5 + v2.0 easy half).
+Extended SEO checks pack (librecrawl-mcp v1.5 + v2.0 easy half).
 
 Closes the gap between LibreCrawl's upstream checks and Screaming-Frog parity
 on the items that don't need a JS render. Each check writes findings to a
@@ -721,7 +721,7 @@ async def _fetch_for_checks(url: str, client: httpx.AsyncClient,
     try:
         r = await client.get(url, timeout=timeout_s, follow_redirects=True,
                               headers={
-                                  "User-Agent": "LibreCrawl-MCP/1.5 (Extended Checks; +https://github.com/adityaarsharma/librecrawl-technical-seo-audit-mcp)",
+                                  "User-Agent": "LibreCrawl-MCP/1.5 (Extended Checks; +https://github.com/adityaarsharma/librecrawl-mcp)",
                                   "Accept": "text/html,*/*;q=0.5",
                               })
         return url, r, None
@@ -1071,13 +1071,13 @@ def run_extended_checks(pages: list, base_url: str, output_path: Path,
     fetch_urls = candidates[:limit]
 
     if fetch_urls:
-        loop = asyncio.new_event_loop()
-        try:
-            results = loop.run_until_complete(
-                _fetch_all(fetch_urls, max_workers, timeout_seconds)
-            )
-        finally:
-            loop.close()
+        # Python 3.12: asyncio.run() handles event-loop create/close + transport
+        # cleanup atomically. The old new_event_loop()+close() pattern leaked
+        # closed-loop references between sequential module calls in the runner
+        # thread — see v2.0.6 fix comment in content_audit.py for full diagnosis.
+        results = asyncio.run(
+            _fetch_all(fetch_urls, max_workers, timeout_seconds)
+        )
 
         for url, resp, err in results:
             if err or resp is None:
