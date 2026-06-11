@@ -295,6 +295,29 @@ async def _fetch_all(urls: list, max_workers: int, timeout_s: float) -> list:
         return await asyncio.gather(*(_bounded(u) for u in urls))
 
 
+def _run_coro(coro):
+    """Run an async coroutine to completion from ANY context.
+
+    - Runner worker thread (no event loop running) → asyncio.run() directly.
+    - MCP async handler (uvicorn loop already running, e.g. when finalize is
+      reached via librecrawl_audit_force_advance) → run it in a dedicated
+      worker thread with its own fresh loop, so we never hit
+      "asyncio.run() cannot be called from a running event loop".
+
+    This is the v2.0.7 fix for content-audit / extended-checks / external-links
+    silently disappearing from force-advanced audits.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop in this thread — safe to run directly.
+        return asyncio.run(coro)
+    # A loop is already running in this thread; offload to a separate thread.
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(coro)).result()
+
+
 # ── Public entry point ───────────────────────────────────────────────────────
 
 def audit_content(pages: list, output_path: Path, limit: int = 250,
@@ -344,13 +367,15 @@ def audit_content(pages: list, output_path: Path, limit: int = 250,
     # Fetch all pages concurrently
     fetch_results = []
     if target_urls:
-        # Python 3.12: asyncio.run() handles event-loop create/close + transport
-        # cleanup atomically. The old new_event_loop()+close() pattern leaked
-        # closed-loop references between sequential module calls in the runner
-        # thread (extended_checks ran after content_audit ran after external_links
-        # in the same worker — httpx.AsyncClient's internal asyncio.get_event_loop()
-        # calls resolved to a previous module's already-closed loop).
-        fetch_results = asyncio.run(
+        # v2.0.7: _run_coro() dispatches to a worker thread when an event loop
+        # is ALREADY running (the case when finalize is triggered via the
+        # librecrawl_audit_force_advance MCP tool, which executes inside the
+        # FastMCP/uvicorn async handler). Plain asyncio.run() there throws
+        # "asyncio.run() cannot be called from a running event loop", which
+        # silently dropped content-audit / extended-checks / external-links
+        # from every force-advanced audit. _run_coro() works in BOTH the
+        # runner thread (no loop) and the async handler (loop running).
+        fetch_results = _run_coro(
             _fetch_all(target_urls, max_workers, timeout_seconds)
         )
 

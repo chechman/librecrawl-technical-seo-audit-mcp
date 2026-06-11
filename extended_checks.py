@@ -742,6 +742,24 @@ async def _fetch_all(urls: list, max_workers: int, timeout_s: float) -> list:
         return await asyncio.gather(*(_bounded(u) for u in urls))
 
 
+def _run_coro(coro):
+    """Run an async coroutine to completion from ANY context.
+
+    Runner worker thread (no loop) → asyncio.run() directly. MCP async handler
+    (uvicorn loop running, e.g. finalize reached via force_advance) → offload to
+    a worker thread so we never hit "asyncio.run() cannot be called from a
+    running event loop". v2.0.7 fix — see content_audit._run_coro for full
+    diagnosis.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(coro)).result()
+
+
 # Pattern: src="http://..." / href="http://..." on a (presumably) HTTPS page.
 _HTTP_RES_RE = re.compile(
     r'(?:src|href)\s*=\s*[\'"]\s*(http://[^\s\'"]+)',
@@ -1071,11 +1089,9 @@ def run_extended_checks(pages: list, base_url: str, output_path: Path,
     fetch_urls = candidates[:limit]
 
     if fetch_urls:
-        # Python 3.12: asyncio.run() handles event-loop create/close + transport
-        # cleanup atomically. The old new_event_loop()+close() pattern leaked
-        # closed-loop references between sequential module calls in the runner
-        # thread — see v2.0.6 fix comment in content_audit.py for full diagnosis.
-        results = asyncio.run(
+        # v2.0.7: _run_coro() works whether or not an event loop is already
+        # running — fixes extended-checks vanishing from force-advanced audits.
+        results = _run_coro(
             _fetch_all(fetch_urls, max_workers, timeout_seconds)
         )
 

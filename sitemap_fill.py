@@ -1,5 +1,5 @@
 """
-Sitemap-orphan filler (librecrawl-technical-seo-audit-mcp v1.6).
+Sitemap-orphan filler (librecrawl-mcp v1.6).
 
 LibreCrawl's upstream Flask crawler accepts only a single seed URL and
 traverses internal links up to maxDepth. Sitemap URLs that are NOT reachable
@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 import httpx
 
 
-USER_AGENT = "LibreCrawl-MCP/1.6 (Sitemap-Fill; +https://github.com/adityaarsharma/librecrawl-technical-seo-audit-mcp)"
+USER_AGENT = "LibreCrawl-MCP/1.6 (Sitemap-Fill; +https://github.com/adityaarsharma/librecrawl-mcp)"
 
 
 class _SEOExtractor(HTMLParser):
@@ -359,6 +359,29 @@ async def _fill_async(urls: list, max_workers: int,
                                     return_exceptions=False)
 
 
+def _run_coro(coro):
+    """Run an async coroutine to completion from ANY context.
+
+    v2.0.7 CRITICAL fix. sitemap_fill is what backfills the sitemap-only
+    orphan URLs (the bulk of coverage on sites where pages aren't reachable
+    from the homepage within maxDepth). It previously used
+    new_event_loop()+run_until_complete(), which throws when finalize is
+    reached via librecrawl_audit_force_advance (running inside the FastMCP
+    async handler). That silently reduced coverage to only the internally-
+    linked pages — e.g. 41/1934 on a force-advanced theplusaddons.com audit.
+
+    Runner worker thread (no loop) → asyncio.run() directly.
+    Async MCP handler (loop running) → offload to a worker thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(coro)).result()
+
+
 def fill_sitemap_orphans(missed_urls: list,
                           max_workers: int = 10,
                           timeout_seconds: float = 8.0,
@@ -387,13 +410,12 @@ def fill_sitemap_orphans(missed_urls: list,
     cap_hit = len(missed_urls) > cap
     targets = missed_urls[:cap]
 
-    loop = asyncio.new_event_loop()
-    try:
-        pages = loop.run_until_complete(
-            _fill_async(targets, max_workers, timeout_seconds)
-        )
-    finally:
-        loop.close()
+    # v2.0.7: _run_coro() works whether or not an event loop is already
+    # running. This is THE fix that restores full sitemap coverage on
+    # force-advanced audits (was silently capped at internally-linked pages).
+    pages = _run_coro(
+        _fill_async(targets, max_workers, timeout_seconds)
+    )
 
     success = sum(1 for p in pages
                   if str(p.get("status_code", "")).startswith("2"))

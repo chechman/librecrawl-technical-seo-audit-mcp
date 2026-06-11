@@ -272,6 +272,24 @@ async def _validate_all(targets: list[str], max_workers: int,
         return await asyncio.gather(*(_bounded(t) for t in targets))
 
 
+def _run_coro(coro):
+    """Run an async coroutine to completion from ANY context.
+
+    Runner worker thread (no loop) → asyncio.run() directly. MCP async handler
+    (uvicorn loop running, e.g. finalize reached via force_advance) → offload to
+    a worker thread so we never hit "asyncio.run() cannot be called from a
+    running event loop". v2.0.7 fix — see content_audit._run_coro for full
+    diagnosis.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(coro)).result()
+
+
 def _write_csv(rows: list[dict], source_map: dict, skip_map: dict,
                output_path) -> dict:
     """Write the external-links.csv. Returns {path, rows, validated, skipped}."""
@@ -345,11 +363,9 @@ def audit_external_links(pages: list, base_url: str, output_path,
     targets = list(validate_map.keys())
 
     if targets:
-        # Python 3.12: asyncio.run() — see v2.0.6 fix comment in content_audit.py.
-        # external_links was the only module that worked under the old pattern
-        # because it runs FIRST in the finalize sequence (clean asyncio state),
-        # but the same risk applies — patching for consistency + future-proofing.
-        results = asyncio.run(
+        # v2.0.7: _run_coro() works whether or not an event loop is already
+        # running — consistent with content_audit + extended_checks fix.
+        results = _run_coro(
             _validate_all(targets, max_workers, timeout_seconds)
         )
     else:
