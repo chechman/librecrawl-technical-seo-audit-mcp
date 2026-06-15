@@ -1,5 +1,51 @@
 # Changelog
 
+## [2.1.1] — 2026-06-13
+### Fixed
+- **OOM crash-loop on large heavy sites.** v2.1.0 made content/extended checks
+  run on EVERY page; on a 1900+ page site with 4-5 MB pages that exhausted
+  memory and looped. Deep-checks (content-audit, extended-checks) now cap at
+  500 pages by default (tunable up via `content_check_limit` /
+  `extended_check_limit`), while per-page core checks + external-link
+  validation still cover 100% of pages. Verified: full theplusaddons.com
+  audit (1,942 pages) completes cleanly.
+
+## [2.1.0] — 2026-06-12
+### Added
+- **FULL audit by default — every page, every text, every link.** No caps to
+  remember, no flags to pass. `sitemap_fill_cap` defaults to 0 (= entire
+  sitemap, bounded by total_max_pages). Word-by-word content analysis and
+  extended SEO checks run across the whole crawl, not a sample.
+### Changed
+- HARD_DEADLINE 4h → 12h (polite full crawls of very large sites run long).
+
+## [2.0.9] — 2026-06-11
+### Fixed
+- **Screaming-Frog-grade politeness — never overload an origin.** Fetch
+  concurrency lowered to 4 workers + 500ms jittered delay (was 16/no-delay,
+  which slowed a heavy origin). Heavy pages get more TIME (25s timeout), not
+  more PARALLELISM. External-link concurrency capped at 8.
+
+## [2.0.8] — 2026-06-11
+### Fixed
+- **Heavy / large websites now crawlable.** Fetch timeout 8s → 25s so 4-5 MB
+  pages actually load instead of timing out to status 0. Deep-check sample
+  raised.
+
+## [2.0.7] — 2026-06-11
+### Fixed
+- **Async modules work under force_advance (event-loop fix).** Finalize
+  reached via the force-advance tool runs inside the async MCP handler;
+  asyncio.run() crashed there, silently dropping content-audit /
+  extended-checks / external-links / sitemap-fill. Added _run_coro() to all
+  four modules so finalize works from any context (8 files always produced,
+  full sitemap coverage).
+
+## [2.0.5] — 2026-06-05
+### Fixed
+- **hreflang false positives.** Case-insensitive region codes (de-de, zh-cn)
+  no longer flagged; x-default excluded from lang-attr conflict check.
+
 All notable changes to **librecrawl-technical-seo-audit-mcp** are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning follows [SemVer](https://semver.org/).
 
