@@ -54,6 +54,29 @@ That's the product. **Your AI assistant runs a full technical SEO audit for you.
 
 ---
 
+## ✅ One command = a complete audit (v2.1.1)
+
+No flags to remember, no caps to set. Anyone who runs:
+
+```
+librecrawl_start_chunked_audit(url="https://yoursite.com")
+```
+
+gets a **full end-to-end audit by default**:
+
+- **Every page** — entire sitemap crawled, including orphan pages not linked from the homepage
+- **Every page's text** — readability, AI-tells, boilerplate analyzed word-by-word
+- **Every outbound link** — every domain (yours, third-party, social, CDN) HTTP-validated for broken links
+- **No silent dropping** — per-page checks + link validation cover 100% of pages; the report states exactly what was covered
+- **Heavy sites safe** — 4–5 MB pages crawl fine; Screaming-Frog-grade politeness never overloads the origin
+- **Zero history** — the server forgets the entire audit the moment you download the zip; re-scan anytime, nothing persists
+
+Verified on real production sites: 1,942-page and 709-page WordPress sites, full coverage, origins healthy throughout.
+
+> **Note:** runs **one audit at a time** (single-tenant backend). For team use, queue audits sequentially — concurrent multi-audit routing is on the roadmap.
+
+---
+
 ## 🔥 Why this exists
 
 There are great desktop SEO crawlers (you know the ones). There are great cloud SEO suites. **There was no AI-native crawler.** librecrawl-technical-seo-audit-mcp fills that gap with five things no comparable open-source MCP server does:
