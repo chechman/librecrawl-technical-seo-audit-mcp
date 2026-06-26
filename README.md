@@ -110,7 +110,7 @@ WeasyPrint, A4, page numbers, footer on every page. Open in any PDF viewer. No S
 ## ⚡ Install in 60 seconds
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chechman/librecrawl-technical-seo-audit-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chechman/librecrawl-technical-seo-audit-mcp/166f1f636f5f9b5fa92b259ed5f2eac6ae995cd0/install.sh | bash
 ```
 
 The installer asks 3 questions (target client, optional Google PageSpeed API key, optional GSC integration) and writes a ready-to-use MCP entry into your Claude / Cursor / Codex / Windsurf config. **Done.**
