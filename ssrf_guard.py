@@ -112,3 +112,24 @@ def safe_get(client, url: str, *, max_redirects: int = 5, **kwargs):
             continue
         return resp
     raise BlockedURLError(f"too many redirects (>{max_redirects}) starting at {url!r}")
+
+
+async def _async_request_hook(request) -> None:
+    """httpx async event-hook: SSRF-validate every outgoing request URL.
+
+    Fires for the initial request AND each redirect hop (with follow_redirects
+    on), so a public host cannot 30x-redirect onto an internal address. The
+    blocking DNS lookup is offloaded to a worker thread so we don't stall the
+    event loop. Raising here aborts the request; callers catch it as a fetch
+    failure.
+    """
+    import anyio  # httpx depends on anyio, so this is always importable.
+    await anyio.to_thread.run_sync(validate_url, str(request.url))
+
+
+def async_guard_hooks() -> dict:
+    """`event_hooks` dict for httpx.AsyncClient that SSRF-validates each request.
+
+    Usage: httpx.AsyncClient(event_hooks=ssrf_guard.async_guard_hooks(), ...)
+    """
+    return {"request": [_async_request_hook]}

@@ -23,6 +23,7 @@ from urllib.parse import urlparse, urljoin
 from collections import defaultdict
 
 import httpx
+import ssrf_guard
 
 
 # URL schemes we will not validate over HTTP (not a defect, just not a webhit)
@@ -265,7 +266,12 @@ async def _validate_all(targets: list[str], max_workers: int,
                          timeout_s: float) -> list[dict]:
     """Bounded-concurrency validation over the unique target list."""
     sem = asyncio.Semaphore(max_workers)
-    async with httpx.AsyncClient(http2=False, verify=True) as client:
+    # SSRF guard: external link targets are extracted from attacker-controlled
+    # crawled pages, so validate each request (and redirect hop) against
+    # non-public IPs. A link to 169.254.169.254 / localhost / RFC1918 is refused
+    # and recorded as an error row rather than probed.
+    async with httpx.AsyncClient(http2=False, verify=True,
+                                 event_hooks=ssrf_guard.async_guard_hooks()) as client:
         async def _bounded(t):
             async with sem:
                 return await _validate_one(t, client, timeout_s)

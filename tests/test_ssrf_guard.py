@@ -129,5 +129,56 @@ class SafeGet(unittest.TestCase):
                 safe_get(client, "http://public.example.com/", max_redirects=3)
 
 
+class AsyncHookIntegration(unittest.TestCase):
+    """Drive the async event-hook through a real httpx.AsyncClient + MockTransport."""
+
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def _getaddrinfo(self, host, *a, **k):
+        # internal.* resolves to loopback; everything else to a public IP.
+        ip = "127.0.0.1" if str(host).startswith("internal") else "93.184.216.34"
+        return _addrinfo(ip)
+
+    def test_blocks_initial_internal_and_allows_public(self):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(200, text="ok")
+
+        async def go():
+            transport = httpx.MockTransport(handler)
+            async with httpx.AsyncClient(
+                transport=transport, event_hooks=ssrf_guard.async_guard_hooks()
+            ) as client:
+                resp = await client.get("http://public.example/")   # allowed
+                self.assertEqual(resp.status_code, 200)
+                with self.assertRaises(BlockedURLError):
+                    await client.get("http://internal.svc/")         # blocked
+
+        with mock.patch.object(ssrf_guard.socket, "getaddrinfo", self._getaddrinfo):
+            self._run(go())
+
+    def test_blocks_redirect_hop_to_internal(self):
+        import httpx
+
+        def handler(request):
+            if request.url.host.startswith("internal"):
+                return httpx.Response(200, text="secret")
+            return httpx.Response(302, headers={"location": "http://internal.meta/"})
+
+        async def go():
+            transport = httpx.MockTransport(handler)
+            async with httpx.AsyncClient(
+                transport=transport, event_hooks=ssrf_guard.async_guard_hooks()
+            ) as client:
+                with self.assertRaises(BlockedURLError):
+                    await client.get("http://public.example/", follow_redirects=True)
+
+        with mock.patch.object(ssrf_guard.socket, "getaddrinfo", self._getaddrinfo):
+            self._run(go())
+
+
 if __name__ == "__main__":
     unittest.main()

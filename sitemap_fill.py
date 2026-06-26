@@ -31,6 +31,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 import httpx
+import ssrf_guard
 
 
 USER_AGENT = "LibreCrawl-MCP/1.6 (Sitemap-Fill; +https://github.com/adityaarsharma/librecrawl-mcp)"
@@ -368,7 +369,12 @@ async def _fill_async(urls: list, max_workers: int,
     """
     sem = asyncio.Semaphore(max_workers)
     base_delay = max(0.0, delay_ms / 1000.0)
-    async with httpx.AsyncClient(http2=False, verify=True) as client:
+    # SSRF guard: validate every request (and redirect hop) against non-public
+    # IPs. Sitemap "orphan" URLs come from the audited site's sitemap.xml and are
+    # fully attacker-controlled, so an entry pointing at 169.254.169.254 / 10.x /
+    # localhost is refused here. Blocked fetches surface as error_type rows.
+    async with httpx.AsyncClient(http2=False, verify=True,
+                                 event_hooks=ssrf_guard.async_guard_hooks()) as client:
         async def _bounded(u):
             async with sem:
                 if base_delay > 0:
