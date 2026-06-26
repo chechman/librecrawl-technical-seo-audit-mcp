@@ -110,7 +110,7 @@ WeasyPrint, A4, page numbers, footer on every page. Open in any PDF viewer. No S
 ## ⚡ Install in 60 seconds
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adityaarsharma/librecrawl-technical-seo-audit-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chechman/librecrawl-technical-seo-audit-mcp/main/install.sh | bash
 ```
 
 The installer asks 3 questions (target client, optional Google PageSpeed API key, optional GSC integration) and writes a ready-to-use MCP entry into your Claude / Cursor / Codex / Windsurf config. **Done.**
@@ -131,7 +131,7 @@ You don't need to be. If you can:
 <summary><strong>Manual install (Python 3.10+, Docker for LibreCrawl backend)</strong></summary>
 
 ```bash
-git clone https://github.com/adityaarsharma/librecrawl-technical-seo-audit-mcp.git
+git clone https://github.com/chechman/librecrawl-technical-seo-audit-mcp.git
 cd librecrawl-technical-seo-audit-mcp
 python3 -m venv venv && source venv/bin/activate
 pip install httpx mcp weasyprint markdown fpdf2

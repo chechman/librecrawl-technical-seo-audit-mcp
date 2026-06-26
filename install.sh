@@ -4,7 +4,7 @@
 # Self-hosted SEO crawler — MCP server for any AI agent
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/adityaarsharma/librecrawl-technical-seo-audit-mcp/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/chechman/librecrawl-technical-seo-audit-mcp/main/install.sh | bash
 #
 # Or with a custom install dir:
 #   INSTALL_DIR=/opt/librecrawl-technical-seo-audit-mcp bash install.sh
@@ -203,18 +203,20 @@ info "Step 4/5 — Installing LibreCrawl MCP server (v2.0.3 — 37 tools)..."
 MCP_DIR="${INSTALL_DIR}/mcp-server"
 mkdir -p "${MCP_DIR}"
 
-# Download all 10 Python modules that make up the v2.0.3 MCP wrapper.
-# server.py is the FastMCP entrypoint; the others are imported by it.
+# Download the 11 Python modules that make up the MCP wrapper.
+# server.py is the FastMCP entrypoint; the others are imported by it — including
+# ssrf_guard.py, the SSRF deny-list every external fetch routes through, so it is
+# REQUIRED (server.py imports it at startup).
 # Server-side instructions + ephemeral mode + 37 tools all need these files.
-info "Downloading MCP server modules from GitHub (10 files)..."
-BASE_URL="https://raw.githubusercontent.com/adityaarsharma/librecrawl-technical-seo-audit-mcp/main"
+info "Downloading MCP server modules from GitHub (11 files)..."
+BASE_URL="https://raw.githubusercontent.com/chechman/librecrawl-technical-seo-audit-mcp/main"
 for f in server.py state.py libreclient.py runner.py external_links.py \
          content_audit.py extended_checks.py schema_validator.py \
-         sitemap_fill.py pdf_report.py; do
+         sitemap_fill.py pdf_report.py ssrf_guard.py; do
   curl -fsSL "${BASE_URL}/${f}" -o "${MCP_DIR}/${f}" \
        || err "Failed to download ${f} from GitHub"
 done
-log "10 Python modules downloaded"
+log "11 Python modules downloaded"
 
 # Optional: drop the Claude Code skill into ~/.claude/skills/ for clients
 # that pick it up (Claude Code does — server-side `instructions` covers
