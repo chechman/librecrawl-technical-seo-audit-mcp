@@ -287,6 +287,17 @@ def _wrap_html(body_html: str, title: str) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _blocking_url_fetcher(url: str):
+    """WeasyPrint url_fetcher that refuses ALL external/local resource loads.
+
+    The audit PDF never needs to fetch images, stylesheets, or fonts by URL, so
+    any fetch attempt originates from injected crawled HTML (file:// LFI or
+    http:// SSRF). Raising here aborts that single resource load; WeasyPrint
+    renders the document without it.
+    """
+    raise ValueError(f"external resource blocked in report PDF: {url[:80]!r}")
+
+
 def render_pdf(markdown_text: str, output_path: Path, base_url: str) -> dict:
     """
     Render a markdown report to PDF with Aditya branding.
@@ -317,12 +328,15 @@ def render_pdf(markdown_text: str, output_path: Path, base_url: str) -> dict:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # WeasyPrint takes a string url-or-content; we use string_io via from_string.
-    # base_url passed to HTML lets relative resources resolve (we don't need it,
-    # but pass it anyway to avoid warnings).
-    HTML(string=full_html, base_url=str(output_path.parent)).write_pdf(
-        target=str(output_path)
-    )
+    # SECURITY: the report body contains crawled, attacker-controlled text
+    # (titles, metas, H1s). Markdown passes raw HTML through, so a crawled page
+    # could embed <img src="file:///etc/passwd"> or <img src="http://127.0.0.1/">
+    # and WeasyPrint's default fetcher would read that local file / hit that
+    # internal service during render. The report legitimately needs NO external
+    # resources, so we install a url_fetcher that refuses every fetch — this
+    # closes both the local-file-read and SSRF vectors regardless of body HTML.
+    HTML(string=full_html, base_url=str(output_path.parent),
+         url_fetcher=_blocking_url_fetcher).write_pdf(target=str(output_path))
 
     # Page count - use pypdf to inspect the result. Failures fall back to 0.
     pages = 0

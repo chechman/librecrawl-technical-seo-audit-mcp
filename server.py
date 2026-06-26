@@ -403,6 +403,21 @@ def _site_check(base_url: str) -> dict:
 
 # ── Report generator ──────────────────────────────────────────────────────────
 
+def _md(value) -> str:
+    """Escape crawled free-text for safe inline use in a Markdown table/body cell.
+
+    Crawled titles/metas/H1s/anchors are attacker-controlled and flow into the
+    Markdown report, which is rendered to HTML/PDF. Markdown passes raw HTML
+    through, so this neutralises injected tags (escapes < > &) and Markdown
+    table-control characters (| and newlines). Defence-in-depth alongside the
+    PDF url_fetcher block in pdf_report; also keeps tables from breaking on
+    stray pipes.
+    """
+    import html as _html
+    s = _html.escape(str(value), quote=False)
+    return s.replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
 def _build_report(pages: list, base_url: str, crawl_id: int,
                   site_data: dict = None, links: list = None,
                   completeness: dict = None,
@@ -750,7 +765,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
             cls    = row.get("status_class") or ""
             src    = (row.get("source") or "")[:60]
             anchor = (row.get("anchor") or "—")[:40].replace("|", " ")
-            lines.append(f"| `{tgt}` | {sc} ({cls}) | `{src}` | {anchor} |")
+            lines.append(f"| `{tgt}` | {sc} ({cls}) | `{src}` | {_md(anchor)} |")
         if len(top) > 25:
             lines.append(f"\n*…and {len(top)-25} more — see `<domain>-<ts>.external-links.csv` for the full list.*")
         lines.append("")
@@ -785,7 +800,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         h(3, f"Duplicate Titles ({len(dup_titles)} groups)")
         lines.append("> **Fix:** Every page needs a unique title. Redirect or merge pages if they cover the same topic.\n")
         for title, urls in list(dup_titles.items())[:10]:
-            lines.append(f"**\"{title[:70]}\"**")
+            lines.append(f"**\"{_md(title[:70])}\"**")
             for u in urls:
                 li(f"`{u}`")
             lines.append("")
@@ -823,7 +838,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         h(3, f"Duplicate Meta Descriptions ({len(dup_metas)} groups)")
         lines.append("> **Fix:** Write unique meta descriptions for each page. Duplicates waste click-through potential.\n")
         for meta, urls in list(dup_metas.items())[:8]:
-            lines.append(f"**\"{meta[:80]}\"**")
+            lines.append(f"**\"{_md(meta[:80])}\"**")
             for u in urls[:5]:
                 li(f"`{u}`")
             lines.append("")
@@ -835,7 +850,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         lines.append("| URL | Length | Preview |")
         lines.append("|-----|--------|---------|")
         for url, meta in long_meta[:20]:
-            lines.append(f"| `{url}` | {len(meta)} | {meta[:80]}… |")
+            lines.append(f"| `{url}` | {len(meta)} | {_md(meta[:80])}… |")
         lines.append("")
 
     # Meta too short
@@ -845,7 +860,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         lines.append("| URL | Length | Current |")
         lines.append("|-----|--------|---------|")
         for url, meta in short_meta[:15]:
-            lines.append(f"| `{url}` | {len(meta)} | {meta} |")
+            lines.append(f"| `{url}` | {len(meta)} | {_md(meta)} |")
         lines.append("")
 
     # Missing H1
@@ -865,7 +880,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         lines.append("| URL | Title (truncated) | Length |")
         lines.append("|-----|-------------------|--------|")
         for url, title in long_title[:20]:
-            lines.append(f"| `{url}` | {title[:60]}… | {len(title)} |")
+            lines.append(f"| `{url}` | {_md(title[:60])}… | {len(title)} |")
         if len(long_title) > 20:
             lines.append(f"| … | {len(long_title)-20} more | |")
         lines.append("")
@@ -877,7 +892,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         lines.append("| URL | Title | Length |")
         lines.append("|-----|-------|--------|")
         for url, title in short_title[:15]:
-            lines.append(f"| `{url}` | {title} | {len(title)} |")
+            lines.append(f"| `{url}` | {_md(title)} | {len(title)} |")
         lines.append("")
 
     # H1 ↔ Title mismatch
@@ -887,7 +902,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         lines.append("| URL | Title | H1 |")
         lines.append("|-----|-------|----|")
         for url, title, h1 in h1_title_mismatch[:15]:
-            lines.append(f"| `{url}` | {title} | {h1} |")
+            lines.append(f"| `{url}` | {_md(title)} | {_md(h1)} |")
         lines.append("")
 
     # Thin content
@@ -1284,7 +1299,7 @@ def _build_report(pages: list, base_url: str, crawl_id: int,
         canonical = (p.get("canonical_url") or "").strip()
         canon_icon = "✅" if canonical == url else ("—" if not canonical else "↪️")
         status_icon = "🔴" if str(status).startswith(("4","5")) else "↪️" if str(status).startswith("3") else "✅"
-        lines.append(f"| {status_icon} {status} | {depth} | `{url}` | {title} | {words} | {canon_icon} |")
+        lines.append(f"| {status_icon} {status} | {depth} | `{url}` | {_md(title)} | {words} | {canon_icon} |")
 
     if len(pages) > 300:
         lines.append(f"| … | | {len(pages)-300} more pages not shown | | | |")
