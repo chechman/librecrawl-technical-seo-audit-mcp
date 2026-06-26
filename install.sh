@@ -209,7 +209,9 @@ mkdir -p "${MCP_DIR}"
 # REQUIRED (server.py imports it at startup).
 # Server-side instructions + ephemeral mode + 37 tools all need these files.
 info "Downloading MCP server modules from GitHub (11 files)..."
-BASE_URL="https://raw.githubusercontent.com/chechman/librecrawl-technical-seo-audit-mcp/main"
+# Pinned to an immutable commit SHA (not a moving branch) so an install always
+# pulls exactly this reviewed, hardened code even if main advances later.
+BASE_URL="https://raw.githubusercontent.com/chechman/librecrawl-technical-seo-audit-mcp/88ca0b317fbd2cfbfd1c2c1da920d5c8652a16b5"
 for f in server.py state.py libreclient.py runner.py external_links.py \
          content_audit.py extended_checks.py schema_validator.py \
          sitemap_fill.py pdf_report.py ssrf_guard.py; do
