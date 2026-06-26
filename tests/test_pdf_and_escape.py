@@ -50,5 +50,29 @@ class MdEscape(unittest.TestCase):
         self.assertEqual(self.server._md(123), "123")
 
 
+class WithinReports(unittest.TestCase):
+    def setUp(self):
+        try:
+            import server
+        except Exception as e:                      # mcp not installed in dev box
+            self.skipTest(f"server import unavailable: {e}")
+        self.server = server
+
+    def test_containment(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "librecrawl-reports"
+            base.mkdir()
+            with mock.patch.object(self.server, "REPORTS_DIR", base):
+                self.assertTrue(self.server._within_reports(base / "a.md"))
+                # sibling dir sharing the textual prefix must be rejected
+                self.assertFalse(self.server._within_reports(
+                    base.parent / "librecrawl-reports-secrets" / "creds"))
+                # traversal must be rejected
+                self.assertFalse(self.server._within_reports(base / ".." / "etc" / "x"))
+
+
 if __name__ == "__main__":
     unittest.main()

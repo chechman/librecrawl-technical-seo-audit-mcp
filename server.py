@@ -97,6 +97,19 @@ BASE            = f"http://127.0.0.1:{os.getenv('LIBRECRAWL_PORT', '5080')}"
 MCP_PORT        = int(os.getenv('MCP_PORT', '5081'))
 REPORTS_DIR     = Path(os.getenv('REPORTS_DIR', Path.home() / 'librecrawl-reports'))
 PSI_API_KEY     = os.getenv('PAGESPEED_API_KEY', '')   # Google PageSpeed Insights
+
+
+def _within_reports(path) -> bool:
+    """True iff `path` resolves to a location inside REPORTS_DIR.
+
+    Uses a real path-boundary check (is_relative_to). The previous
+    str.startswith() test let sibling directories sharing the textual prefix
+    (e.g. '<reports>-secrets/creds') pass the containment check.
+    """
+    try:
+        return Path(path).resolve().is_relative_to(REPORTS_DIR.resolve())
+    except (OSError, ValueError):
+        return False
 PSI_API_BASE    = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 
 # Fields we request on every export
@@ -2732,7 +2745,7 @@ def librecrawl_append_gsc_section(report_path: str, gsc_data: dict) -> dict:
         gsc_data:    GSC data dict from the gsc-posi connector
     """
     path = Path(report_path).resolve()
-    if not str(path).startswith(str(REPORTS_DIR.resolve())):
+    if not _within_reports(path):
         return {"success": False, "error": "report_path must be within REPORTS_DIR"}
     if not path.exists():
         return {"success": False, "error": f"Report not found: {report_path}"}
@@ -3405,7 +3418,7 @@ def librecrawl_report_content(report_path: str, max_chars: int = 200_000) -> dic
                      this is truncated; set higher only if your client can handle it.
     """
     p = Path(report_path).resolve()
-    if not str(p).startswith(str(REPORTS_DIR.resolve())):
+    if not _within_reports(p):
         return {"success": False, "error": f"Path must be within REPORTS_DIR ({REPORTS_DIR})"}
     if not p.exists():
         return {"success": False, "error": f"File not found: {report_path}"}
@@ -3447,7 +3460,7 @@ def librecrawl_audit_pdf(report_path: str, base_url: str = "") -> dict:
     """
     import pdf_report
     p = Path(report_path).resolve()
-    if not str(p).startswith(str(REPORTS_DIR.resolve())):
+    if not _within_reports(p):
         return {"success": False, "error": f"Path must be within REPORTS_DIR ({REPORTS_DIR})"}
     if not p.exists():
         return {"success": False, "error": f"File not found: {report_path}"}
