@@ -16,6 +16,7 @@ from collections import defaultdict
 from html.parser import HTMLParser
 from urllib.parse import urlparse, unquote
 import httpx
+import ssrf_guard
 from mcp.server.fastmcp import FastMCP
 
 # v2.0.3 — server instructions are surfaced to the LLM at connection time by
@@ -205,6 +206,27 @@ def call(method, path, **kwargs):
         raise RuntimeError(f"LibreCrawl returned non-JSON ({r.status_code}): {r.text[:200]}")
 
 
+def _safe_external_get(url, *, timeout=15, follow_redirects=True,
+                       max_redirects=5, **kwargs):
+    """SSRF-guarded GET for attacker-influenced external URLs.
+
+    Resolves DNS and refuses any host that maps to a non-public address; when
+    following redirects, every hop is re-validated (see ssrf_guard). Use this for
+    every URL derived from a crawled/audited site (robots.txt, sitemaps, schema
+    fetches) — NOT for the local LibreCrawl backend or the fixed Google PSI
+    endpoint, whose hosts are trusted and not attacker-controlled.
+
+    Raises ssrf_guard.BlockedURLError (a ValueError) on a blocked target, which
+    callers' existing `except Exception` blocks turn into a graceful error field.
+    """
+    with httpx.Client(timeout=timeout) as client:
+        if follow_redirects:
+            return ssrf_guard.safe_get(client, url, max_redirects=max_redirects,
+                                       **kwargs)
+        ssrf_guard.validate_url(url)
+        return client.get(url, follow_redirects=False, **kwargs)
+
+
 def _ensure_crawler_ready() -> dict:
     """
     Make sure the upstream crawler is in a clean state before a new crawl.
@@ -278,7 +300,7 @@ def _site_check(base_url: str) -> dict:
 
     # ── robots.txt ────────────────────────────────────────────────────────────
     try:
-        r = httpx.get(f"{root}/robots.txt", timeout=10, follow_redirects=True)
+        r = _safe_external_get(f"{root}/robots.txt", timeout=10, follow_redirects=True)
         if r.status_code == 200:
             txt      = r.text
             lines    = txt.splitlines()
@@ -316,7 +338,7 @@ def _site_check(base_url: str) -> dict:
     sitemap_found = False
     for sm_url in sitemap_urls_to_try:
         try:
-            r = httpx.get(sm_url, timeout=15, follow_redirects=True)
+            r = _safe_external_get(sm_url, timeout=15, follow_redirects=True)
             if r.status_code == 200 and ("<urlset" in r.text or "<sitemapindex" in r.text):
                 url_count = r.text.count("<loc>")
                 is_index  = "<sitemapindex" in r.text
@@ -342,7 +364,7 @@ def _site_check(base_url: str) -> dict:
     if scheme == "https":
         try:
             http_url = f"http://{host}/"
-            r = httpx.get(http_url, timeout=10, follow_redirects=False)
+            r = _safe_external_get(http_url, timeout=10, follow_redirects=False)
             if r.status_code in (301, 302, 307, 308):
                 loc = r.headers.get("location", "")
                 results["https_redirect"] = {
@@ -363,7 +385,7 @@ def _site_check(base_url: str) -> dict:
     try:
         is_www = host.startswith("www.")
         alt_host = host[4:] if is_www else f"www.{host}"
-        r = httpx.get(f"{scheme}://{alt_host}/", timeout=10, follow_redirects=False)
+        r = _safe_external_get(f"{scheme}://{alt_host}/", timeout=10, follow_redirects=False)
         redirects_to_canonical = r.status_code in (301, 302, 307, 308)
         results["www_redirect"] = {
             "canonical_host": host,
@@ -1522,7 +1544,7 @@ def _fetch_sitemap_urls(sitemap_url: str, _depth: int = 0) -> tuple:
         return [], [f"sitemap-index recursion >3 levels at {sitemap_url}"]
     out, errors = [], []
     try:
-        r = httpx.get(sitemap_url, timeout=20, follow_redirects=True,
+        r = _safe_external_get(sitemap_url, timeout=20, follow_redirects=True,
                       headers={"User-Agent": "librecrawl-mcp/sitemap-recon"})
         if r.status_code >= 400:
             errors.append(f"{sitemap_url} → HTTP {r.status_code}")
@@ -2447,35 +2469,13 @@ class _JsonLdExtractor(HTMLParser):
             self._buf.append(data)
 
 
-def _validate_public_url(url: str) -> str | None:
-    """Return error string if URL is unsafe, else None."""
-    import ipaddress
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return f"URL scheme must be http or https, got: {parsed.scheme!r}"
-        host = parsed.hostname or ""
-        # Block private/loopback/link-local addresses
-        try:
-            addr = ipaddress.ip_address(host)
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                return f"Private/internal IP not allowed: {host}"
-        except ValueError:
-            # It's a hostname — block obvious internal names
-            blocked = ("localhost", "metadata.google.internal")
-            if any(host == b or host.endswith("." + b) for b in blocked):
-                return f"Internal hostname not allowed: {host}"
-    except Exception as e:
-        return f"Invalid URL: {e}"
-    return None
-
-
 def _extract_schema(url: str) -> list:
-    err = _validate_public_url(url)
-    if err:
-        return [{"error": err}]
+    # SSRF validation (DNS-resolving, per-redirect-hop) is enforced inside
+    # _safe_external_get via ssrf_guard — see that helper. The previous
+    # _validate_public_url() did not resolve DNS and ignored redirects, so it
+    # was removed rather than left as a bypassable second check.
     try:
-        r = httpx.get(url, follow_redirects=True, timeout=15,
+        r = _safe_external_get(url, follow_redirects=True, timeout=15,
                       headers={"User-Agent": "Mozilla/5.0 (compatible; SEO-bot/1.0)"})
         parser = _JsonLdExtractor()
         parser.feed(r.text)
